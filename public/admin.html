@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ops Dashboard — Admin</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body x-data="adminApp()" x-init="init()">
+
+<template x-if="authChecked && (!user || !user.roles.includes('admin'))">
+  <div class="login-shell">
+    <div class="login-card">
+      <div class="eyebrow">ADMIN CONSOLE</div>
+      <h1 class="hero-title" style="font-size:1.7rem;margin-bottom:1rem;">Admins only</h1>
+      <p style="font-size:0.9rem;color:var(--ink-soft);">
+        Sign in with an account that holds the "admin" role on the <a href="/index.html" style="color:var(--accent);">main dashboard</a> first.
+      </p>
+    </div>
+  </div>
+</template>
+
+<template x-if="authChecked && user && user.roles.includes('admin')">
+<div class="admin-layout">
+  <aside class="admin-sidebar">
+    <div class="brand">OPS<span class="dot" style="color:var(--accent);">.</span>DASH</div>
+    <nav class="admin-nav">
+      <button :class="{active: tab==='dashboards'}" @click="tab='dashboards'"><i class="bi bi-grid-1x2"></i> Dashboards</button>
+      <button :class="{active: tab==='items'}" @click="tab='items'"><i class="bi bi-app-indicator"></i> Items</button>
+      <button :class="{active: tab==='roles'}" @click="tab='roles'"><i class="bi bi-shield-check"></i> Roles</button>
+      <button :class="{active: tab==='users'}" @click="tab='users'"><i class="bi bi-people"></i> Users</button>
+      <button :class="{active: tab==='ip'}" @click="tab='ip'"><i class="bi bi-router"></i> IP Mappings</button>
+      <button :class="{active: tab==='status'}" @click="tab='status'"><i class="bi bi-activity"></i> Live Status</button>
+      <button :class="{active: tab==='backup'}" @click="tab='backup'"><i class="bi bi-cloud-arrow-down"></i> Backup / JSON</button>
+    </nav>
+    <div style="margin-top:auto;display:flex;flex-direction:column;gap:0.4rem;">
+      <button class="btn-sm" @click="themeMenuOpen = !themeMenuOpen" style="justify-content:center;" aria-haspopup="true" :aria-expanded="themeMenuOpen">
+        <i class="bi" :class="themeIcon"></i> Theme
+      </button>
+      <template x-if="themeMenuOpen">
+        <div style="display:flex;flex-direction:column;gap:0.15rem;background:var(--surface-solid);border:1px solid var(--border);border-radius:10px;padding:0.35rem;">
+          <button class="btn-sm" :class="{primary: theme==='light'}" @click="setTheme('light')" style="justify-content:flex-start;border:none;">Light</button>
+          <button class="btn-sm" :class="{primary: theme==='dark'}" @click="setTheme('dark')" style="justify-content:flex-start;border:none;">Dark</button>
+          <button class="btn-sm" :class="{primary: theme==='glass'}" @click="setTheme('glass')" style="justify-content:flex-start;border:none;">Glass</button>
+        </div>
+      </template>
+      <a href="/index.html" class="btn-sm" style="justify-content:center;"><i class="bi bi-arrow-left"></i> Dashboard</a>
+    </div>
+  </aside>
+
+  <main class="admin-main">
+
+    <!-- ===================== DASHBOARDS ===================== -->
+    <template x-if="tab==='dashboards'">
+      <div>
+        <div class="panel-header">
+          <h2>Dashboards</h2>
+          <button class="btn-sm primary" @click="openModal('dashboard')"><i class="bi bi-plus-lg"></i> New dashboard</button>
+        </div>
+        <div class="status-note">
+          <i class="bi bi-info-circle"></i>
+          <div>
+            <strong>Visibility</strong> is role-based. <code>Public</code> means anyone, no login. <code>Any signed-in
+            user</code> means logged in, any role. <code>Specific roles</code> restricts it to users holding at least
+            one of the roles you pick — manage roles on the Roles tab, and assign them to people on the Users tab.
+            Admins (the "admin" role) always see everything.
+          </div>
+        </div>
+        <div class="admin-panel">
+          <table class="admin-table">
+            <thead><tr><th>Slug</th><th>Name</th><th>Sort</th><th>Visibility</th><th></th></tr></thead>
+            <tbody>
+              <template x-for="d in dashboards" :key="d.id">
+                <tr>
+                  <td style="font-family:var(--font-mono);font-size:0.8rem;" x-text="d.slug"></td>
+                  <td><input :value="d.name" @change="updateDashboard(d.id, {name: $event.target.value})"></td>
+                  <td style="width:70px;"><input type="number" :value="d.sort_order" @change="updateDashboard(d.id, {sort_order: Number($event.target.value)})" style="width:55px;"></td>
+                  <td><span class="pill" x-text="visibilitySummary(d.visibility, d.role_ids)"></span></td>
+                  <td style="display:flex;gap:0.4rem;">
+                    <button class="btn-sm" @click="openModal('dashboard', d)"><i class="bi bi-pencil"></i></button>
+                    <button class="btn-sm" @click="manageSections(d)"><i class="bi bi-layout-text-sidebar-reverse"></i> Sections</button>
+                    <button class="btn-sm danger" @click="deleteDashboard(d)"><i class="bi bi-trash"></i></button>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Section Manager -->
+        <template x-if="sectionEditorDashboard">
+          <div style="margin-top:1.5rem;">
+            <div class="panel-header">
+              <h2 style="font-size:1.2rem;">Sections — <span x-text="sectionEditorDashboard.name"></span></h2>
+              <button class="btn-sm primary" @click="openModal('section')"><i class="bi bi-plus-lg"></i> New section</button>
+            </div>
+            <p class="help-text" style="margin-bottom:0.9rem;">
+              A section is a named, styleable band on the dashboard — "Applications", "Bookmarks", or anything you
+              invent ("Runbooks", "Vendor logins"...). <code>Cards</code> renders its categories as big tiles with
+              live-status dots; <code>List</code> renders them as compact link columns.
+            </p>
+            <div class="admin-panel">
+              <table class="admin-table">
+                <thead><tr><th>Name</th><th>Style</th><th>Sort</th><th></th></tr></thead>
+                <tbody>
+                  <template x-for="s in sections" :key="s.id">
+                    <tr>
+                      <td><input :value="s.name" @change="updateSection(s.id, {name: $event.target.value})"></td>
+                      <td>
+                        <select :value="s.display_style" @change="updateSection(s.id, {display_style: $event.target.value})">
+                          <option value="cards">Cards</option>
+                          <option value="list">List</option>
+                        </select>
+                      </td>
+                      <td style="width:70px;"><input type="number" :value="s.sort_order" @change="updateSection(s.id, {sort_order: Number($event.target.value)})" style="width:55px;"></td>
+                      <td><button class="btn-sm danger" @click="deleteSection(s)"><i class="bi bi-trash"></i></button></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="panel-header" style="margin-top:1.5rem;">
+              <h2 style="font-size:1.2rem;">Categories</h2>
+              <button class="btn-sm primary" @click="openModal('category')" :disabled="!sections.length"><i class="bi bi-plus-lg"></i> New category</button>
+            </div>
+            <div class="admin-panel">
+              <table class="admin-table">
+                <thead><tr><th>Name</th><th>Section</th><th>Sort</th><th></th></tr></thead>
+                <tbody>
+                  <template x-for="c in categories" :key="c.id">
+                    <tr>
+                      <td x-text="c.name"></td>
+                      <td>
+                        <select :value="c.section_id" @change="updateCategory(c.id, {section_id: Number($event.target.value)})">
+                          <template x-for="s in sections" :key="'catsec-'+s.id"><option :value="s.id" x-text="s.name"></option></template>
+                        </select>
+                      </td>
+                      <td style="width:70px;"><input type="number" :value="c.sort_order" @change="updateCategory(c.id, {sort_order: Number($event.target.value)})" style="width:55px;"></td>
+                      <td><button class="btn-sm danger" @click="deleteCategory(c)"><i class="bi bi-trash"></i></button></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </template>
+      </div>
+    </template>
+
+    <!-- ===================== ITEMS ===================== -->
+    <template x-if="tab==='items'">
+      <div>
+        <div class="panel-header">
+          <h2>Items</h2>
+          <div style="display:flex;gap:0.6rem;align-items:center;">
+            <select x-model.number="itemsDashboardId" @change="loadItemsFor(itemsDashboardId)" style="padding:0.4rem 0.6rem;border-radius:8px;border:1px solid var(--border);background:var(--surface-solid);color:var(--ink);">
+              <template x-for="d in dashboards" :key="d.id"><option :value="d.id" x-text="d.name"></option></template>
+            </select>
+            <button class="btn-sm primary" @click="openModal('item')" :disabled="!categoriesForItems.length"><i class="bi bi-plus-lg"></i> New item</button>
+          </div>
+        </div>
+        <template x-if="!categoriesForItems.length">
+          <div class="status-note"><i class="bi bi-info-circle"></i><div>This dashboard has no categories yet — add sections and categories from the Dashboards tab first.</div></div>
+        </template>
+        <div class="admin-panel">
+          <table class="admin-table">
+            <thead><tr><th>Name</th><th>Icon</th><th>URL</th><th>Category</th><th>Visibility</th><th>Live status</th><th>Now</th><th></th></tr></thead>
+            <tbody>
+              <template x-for="it in items" :key="it.id">
+                <tr>
+                  <td><input :value="it.name" @change="updateItem(it.id, {name: $event.target.value})" style="width:110px;"></td>
+                  <td><i :class="'bi ' + it.icon" style="color:var(--accent);"></i></td>
+                  <td><input :value="it.url" @change="updateItem(it.id, {url: $event.target.value})" style="width:160px;font-family:var(--font-mono);font-size:0.75rem;"></td>
+                  <td x-text="categoryName(it.category_id)"></td>
+                  <td><button class="btn-sm" @click="editItemVisibility(it)"><span class="pill" x-text="visibilitySummary(it.visibility, it._role_ids)"></span></button></td>
+                  <td>
+                    <select :value="it.status_check" @change="updateItem(it.id, {status_check: Number($event.target.value)})">
+                      <option value="0">Off</option>
+                      <option value="1">On</option>
+                    </select>
+                  </td>
+                  <td><span class="pill" :class="it.last_status" x-text="it.last_status"></span></td>
+                  <td><button class="btn-sm danger" @click="deleteItem(it)"><i class="bi bi-trash"></i></button></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </template>
+
+    <!-- ===================== ROLES ===================== -->
+    <template x-if="tab==='roles'">
+      <div>
+        <div class="panel-header">
+          <h2>Roles</h2>
+        </div>
+        <div class="status-note">
+          <i class="bi bi-info-circle"></i>
+          <div>
+            Roles are the one mechanism for both admin-console access and content visibility. A user can hold several.
+            The <code>admin</code> role is reserved — anyone holding it gets this console and can see everything,
+            everywhere; it can't be deleted. Any other role name is yours to invent (e.g. <code>finance</code>,
+            <code>oncall</code>, <code>contractors</code>) and use as a visibility rule on dashboards or items.
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="field" style="margin:0;"><label>New role name</label><input x-model="newRoleName" placeholder="e.g. finance" @keydown.enter="createRole()"></div>
+          <button class="btn-sm primary" @click="createRole()"><i class="bi bi-plus-lg"></i> Add role</button>
+        </div>
+        <div class="admin-panel">
+          <table class="admin-table">
+            <thead><tr><th>Name</th><th>Created</th><th></th></tr></thead>
+            <tbody>
+              <template x-for="r in roles" :key="r.id">
+                <tr>
+                  <td x-text="r.name"></td>
+                  <td style="font-family:var(--font-mono);font-size:0.75rem;" x-text="r.created_at"></td>
+                  <td><button class="btn-sm danger" @click="deleteRole(r)" :disabled="r.name === 'admin'"><i class="bi bi-trash"></i></button></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </template>
+
+    <!-- ===================== USERS ===================== -->
+    <template x-if="tab==='users'">
+      <div>
+        <div class="panel-header">
+          <h2>Users</h2>
+          <button class="btn-sm primary" @click="openModal('user')"><i class="bi bi-plus-lg"></i> New user</button>
+        </div>
+        <div class="admin-panel">
+          <table class="admin-table">
+            <thead><tr><th>Username</th><th>Roles</th><th>Created</th><th>Reset password</th><th></th></tr></thead>
+            <tbody>
+              <template x-for="u in users" :key="u.id">
+                <tr>
+                  <td x-text="u.username"></td>
+                  <td><button class="btn-sm" @click="editUserRoles(u)"><span class="pill" x-text="u.role_names.length ? u.role_names.join(', ') : 'none'"></span></button></td>
+                  <td style="font-family:var(--font-mono);font-size:0.75rem;" x-text="u.created_at"></td>
+                  <td><input type="password" placeholder="new password" @change="updateUser(u.id, {password: $event.target.value}); $event.target.value=''" style="width:140px;"></td>
+                  <td><button class="btn-sm danger" @click="deleteUser(u)"><i class="bi bi-trash"></i></button></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </template>
+
+    <!-- ===================== IP MAPPINGS ===================== -->
+    <template x-if="tab==='ip'">
+      <div>
+        <div class="panel-header">
+          <h2>IP Mappings</h2>
+          <button class="btn-sm primary" @click="openModal('mapping')"><i class="bi bi-plus-lg"></i> Map an IP</button>
+        </div>
+        <div class="status-note">
+          <i class="bi bi-info-circle"></i>
+          <div>
+            <strong>How this works:</strong> every request's source IP is checked against this table first.
+            A match signs someone in automatically, no login screen. The first time each person logs in
+            from a new IP, this table gets a row for them automatically. Use this screen to fix a wrong
+            mapping (e.g. after a DHCP lease change) or to hand-map a shared kiosk/desk IP to a specific
+            account ahead of time.
+          </div>
+        </div>
+        <div class="admin-panel">
+          <table class="admin-table">
+            <thead><tr><th>IP</th><th>User</th><th>Note</th><th>Created</th><th></th></tr></thead>
+            <tbody>
+              <template x-for="m in mappings" :key="m.id">
+                <tr>
+                  <td style="font-family:var(--font-mono);" x-text="m.ip"></td>
+                  <td x-text="m.username"></td>
+                  <td x-text="m.note"></td>
+                  <td style="font-family:var(--font-mono);font-size:0.75rem;" x-text="m.created_at"></td>
+                  <td><button class="btn-sm danger" @click="deleteMapping(m)"><i class="bi bi-trash"></i> Unmap</button></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </template>
+
+    <!-- ===================== LIVE STATUS ===================== -->
+    <template x-if="tab==='status'">
+      <div>
+        <div class="panel-header">
+          <h2>Live Status</h2>
+          <button class="btn-sm primary" @click="recheckNow()"><i class="bi bi-arrow-clockwise"></i> Re-check now</button>
+        </div>
+        <div class="status-note">
+          <i class="bi bi-info-circle"></i>
+          <div>
+            <strong>How this works:</strong> every <span x-text="statusIntervalLabel"></span> the server sends an HTTP
+            HEAD (falling back to GET) request to each item with "Live status: On", using its Status URL
+            (defaults to the item's own URL). Any response under HTTP 500 — including a 401/403 from an
+            app's own login page — counts as <span class="pill up">up</span>; a timeout, connection error,
+            or 5xx counts as <span class="pill down">down</span>. Cards on the main dashboard poll this
+            result every 20 seconds, so a status change shows up within about half a minute. "Re-check now"
+            forces an immediate pass instead of waiting for the next interval.
+          </div>
+        </div>
+        <div class="admin-panel">
+          <table class="admin-table">
+            <thead><tr><th>Name</th><th>Status URL</th><th>Status</th><th>Last checked</th><th>Response time</th></tr></thead>
+            <tbody>
+              <template x-for="it in monitoredItems" :key="it.id">
+                <tr>
+                  <td x-text="it.name"></td>
+                  <td style="font-family:var(--font-mono);font-size:0.75rem;" x-text="it.status_url || it.url"></td>
+                  <td><span class="pill" :class="it.last_status" x-text="it.last_status"></span></td>
+                  <td style="font-family:var(--font-mono);font-size:0.75rem;" x-text="it.last_checked || '—'"></td>
+                  <td x-text="it.last_response_ms != null ? it.last_response_ms + ' ms' : '—'"></td>
+                </tr>
+              </template>
+              <template x-if="!monitoredItems.length">
+                <tr><td colspan="5" style="color:var(--ink-soft);">No items have live status enabled yet. Turn it on from the Items tab.</td></tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </template>
+
+    <!-- ===================== BACKUP / JSON ===================== -->
+    <template x-if="tab==='backup'">
+      <div>
+        <div class="panel-header"><h2>Backup / JSON</h2></div>
+        <div class="admin-panel">
+          <p class="help-text" style="margin-bottom:1.25rem;">
+            Export a dashboard's sections, categories, and items as a JSON rules file — commit it to git as a backup,
+            or use it as a starting template for a new dashboard. Role names referenced by role-restricted items are
+            exported by name and re-created automatically on import if they don't already exist on this instance.
+            Importing replaces that dashboard's sections, categories, and items entirely.
+          </p>
+          <div class="form-row" style="display:flex;gap:0.6rem;align-items:flex-end;margin-bottom:1.5rem;">
+            <div class="field" style="margin:0;">
+              <label>Dashboard</label>
+              <select x-model.number="backupDashboardId">
+                <template x-for="d in dashboards" :key="d.id"><option :value="d.id" x-text="d.name"></option></template>
+              </select>
+            </div>
+            <button class="btn-sm" @click="exportDashboard()"><i class="bi bi-download"></i> Download JSON</button>
+          </div>
+          <div class="field">
+            <label>Paste JSON to import</label>
+            <textarea x-model="importText" rows="8" style="font-family:var(--font-mono);font-size:0.78rem;width:100%;"></textarea>
+          </div>
+          <button class="btn-sm primary" @click="importDashboard()"><i class="bi bi-upload"></i> Import (replaces existing sections/categories/items)</button>
+        </div>
+      </div>
+    </template>
+
+  </main>
+</div>
+</template>
+
+<!-- ===================== MODALS ===================== -->
+<template x-if="modalOpen === 'dashboard'">
+  <div class="modal-backdrop" @click.self="closeModal()">
+    <div class="modal">
+      <h3 x-text="editingId ? 'Edit dashboard' : 'New dashboard'"></h3>
+      <div class="field"><label>Slug</label><input x-model="form.slug" placeholder="office-a" :disabled="!!editingId"></div>
+      <div class="field"><label>Name</label><input x-model="form.name" placeholder="Office A"></div>
+      <div class="field">
+        <label>Visibility</label>
+        <select x-model="form.visibility">
+          <option value="public">Public — no login required</option>
+          <option value="authenticated">Any signed-in user</option>
+          <option value="roles">Specific roles</option>
+        </select>
+      </div>
+      <template x-if="form.visibility === 'roles'">
+        <div class="field">
+          <label>Roles that can see it</label>
+          <div style="display:flex;flex-wrap:wrap;gap:0.4rem;">
+            <template x-for="r in roles" :key="'dr-'+r.id">
+              <label style="display:flex;align-items:center;gap:0.3rem;font-size:0.82rem;border:1px solid var(--border);border-radius:7px;padding:0.3rem 0.55rem;cursor:pointer;">
+                <input type="checkbox" :checked="form.role_ids.includes(r.id)" @change="toggleFormRole(r.id)">
+                <span x-text="r.name"></span>
+              </label>
+            </template>
+            <template x-if="!roles.length"><span class="help-text">No roles yet — add one on the Roles tab.</span></template>
+          </div>
+        </div>
+      </template>
+      <div class="modal-actions">
+        <button class="btn-sm" @click="closeModal()">Cancel</button>
+        <button class="btn-sm primary" @click="saveDashboard()" x-text="editingId ? 'Save' : 'Create'"></button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<template x-if="modalOpen === 'section'">
+  <div class="modal-backdrop" @click.self="closeModal()">
+    <div class="modal">
+      <h3>New section</h3>
+      <div class="field"><label>Name</label><input x-model="form.name" placeholder="Runbooks"></div>
+      <div class="field">
+        <label>Display style</label>
+        <select x-model="form.display_style">
+          <option value="cards">Cards — big tiles with live status</option>
+          <option value="list">List — compact link columns</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-sm" @click="closeModal()">Cancel</button>
+        <button class="btn-sm primary" @click="createSection()">Create</button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<template x-if="modalOpen === 'category'">
+  <div class="modal-backdrop" @click.self="closeModal()">
+    <div class="modal">
+      <h3>New category</h3>
+      <div class="field"><label>Name</label><input x-model="form.name" placeholder="Databases"></div>
+      <div class="field">
+        <label>Section</label>
+        <select x-model.number="form.section_id">
+          <template x-for="s in sections" :key="'newcatsec-'+s.id"><option :value="s.id" x-text="s.name + ' (' + s.display_style + ')'"></option></template>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-sm" @click="closeModal()">Cancel</button>
+        <button class="btn-sm primary" @click="createCategory()">Create</button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<template x-if="modalOpen === 'item'">
+  <div class="modal-backdrop" @click.self="closeModal()">
+    <div class="modal">
+      <h3 x-text="editingId ? 'Edit item' : 'New item'"></h3>
+      <div class="field"><label>Name</label><input x-model="form.name" placeholder="Redmine"></div>
+      <div class="field"><label>URL</label><input x-model="form.url" placeholder="https://projects.example.net"></div>
+      <div class="field">
+        <label>Category</label>
+        <select x-model.number="form.category_id">
+          <option :value="null">— none —</option>
+          <template x-for="c in categoriesForItems" :key="c.id"><option :value="c.id" x-text="c.name"></option></template>
+        </select>
+      </div>
+      <div class="field">
+        <label>Icon</label>
+        <div class="icon-field-row">
+          <input x-model="form.icon" placeholder="bi-diagram-3">
+          <button type="button" class="icon-preview-btn" @click="iconPickerOpen = true"><i :class="'bi ' + (form.icon || 'bi-link-45deg')"></i></button>
+        </div>
+      </div>
+      <div class="field"><label>Description</label><input x-model="form.description" placeholder="short description"></div>
+      <div class="field">
+        <label>Live status</label>
+        <select x-model.number="form.status_check">
+          <option :value="0">Off</option>
+          <option :value="1">On</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Visibility</label>
+        <select x-model="form.visibility">
+          <option value="public">Public — no login required</option>
+          <option value="authenticated">Any signed-in user</option>
+          <option value="roles">Specific roles</option>
+        </select>
+      </div>
+      <template x-if="form.visibility === 'roles'">
+        <div class="field">
+          <label>Roles that can see it</label>
+          <div style="display:flex;flex-wrap:wrap;gap:0.4rem;">
+            <template x-for="r in roles" :key="'ir-'+r.id">
+              <label style="display:flex;align-items:center;gap:0.3rem;font-size:0.82rem;border:1px solid var(--border);border-radius:7px;padding:0.3rem 0.55rem;cursor:pointer;">
+                <input type="checkbox" :checked="form.role_ids.includes(r.id)" @change="toggleFormRole(r.id)">
+                <span x-text="r.name"></span>
+              </label>
+            </template>
+            <template x-if="!roles.length"><span class="help-text">No roles yet — add one on the Roles tab.</span></template>
+          </div>
+        </div>
+      </template>
+      <div class="modal-actions">
+        <button class="btn-sm" @click="closeModal()">Cancel</button>
+        <button class="btn-sm primary" @click="saveItem()" x-text="editingId ? 'Save' : 'Create'"></button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<template x-if="modalOpen === 'user'">
+  <div class="modal-backdrop" @click.self="closeModal()">
+    <div class="modal">
+      <h3 x-text="editingId ? 'Edit roles' : 'New user'"></h3>
+      <template x-if="!editingId">
+        <div>
+          <div class="field"><label>Username</label><input x-model="form.username"></div>
+          <div class="field"><label>Password</label><input type="password" x-model="form.password"></div>
+        </div>
+      </template>
+      <div class="field">
+        <label>Roles</label>
+        <div style="display:flex;flex-wrap:wrap;gap:0.4rem;">
+          <template x-for="r in roles" :key="'ur-'+r.id">
+            <label style="display:flex;align-items:center;gap:0.3rem;font-size:0.82rem;border:1px solid var(--border);border-radius:7px;padding:0.3rem 0.55rem;cursor:pointer;">
+              <input type="checkbox" :checked="form.role_ids.includes(r.id)" @change="toggleFormRole(r.id)">
+              <span x-text="r.name"></span>
+            </label>
+          </template>
+          <template x-if="!roles.length"><span class="help-text">No roles yet — add one on the Roles tab.</span></template>
+        </div>
+        <span class="help-text" style="margin-top:0.3rem;">The "admin" role grants this console and full visibility. Any other role can be used to scope dashboard/item visibility.</span>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-sm" @click="closeModal()">Cancel</button>
+        <button class="btn-sm primary" @click="saveUser()" x-text="editingId ? 'Save' : 'Create'"></button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<template x-if="modalOpen === 'mapping'">
+  <div class="modal-backdrop" @click.self="closeModal()">
+    <div class="modal">
+      <h3>Map an IP</h3>
+      <div class="field"><label>IP address</label><input x-model="form.ip" placeholder="10.0.1.42"></div>
+      <div class="field">
+        <label>User</label>
+        <select x-model.number="form.user_id">
+          <template x-for="u in users" :key="u.id"><option :value="u.id" x-text="u.username"></option></template>
+        </select>
+      </div>
+      <div class="field"><label>Note</label><input x-model="form.note" placeholder="Front desk PC"></div>
+      <div class="modal-actions">
+        <button class="btn-sm" @click="closeModal()">Cancel</button>
+        <button class="btn-sm primary" @click="createMapping()">Map</button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<!-- ===================== ICON PICKER ===================== -->
+<template x-if="iconPickerOpen">
+  <div class="modal-backdrop" @click.self="iconPickerOpen = false">
+    <div class="modal" style="max-width:560px;">
+      <h3>Choose an icon</h3>
+      <p class="help-text" style="margin-bottom:0.5rem;">
+        These are all <span x-text="iconList.length"></span> icons from Bootstrap Icons — the set already
+        used across the dashboard. Search by name, click one to select it. Full reference with visuals:
+        <a href="https://icons.getbootstrap.com" target="_blank" rel="noopener" style="color:var(--accent);">icons.getbootstrap.com</a>.
+      </p>
+      <input type="text" class="icon-picker-search" placeholder="Search icons…" x-model="iconSearch" x-ref="iconSearchInput" style="width:100%;padding:0.55rem 0.7rem;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--ink);font-family:var(--font-body);">
+      <div class="icon-picker-grid">
+        <template x-for="name in filteredIcons()" :key="name">
+          <div class="icon-picker-cell" :class="{selected: form.icon === 'bi-' + name}" @click="selectIcon(name)" :title="name">
+            <i :class="'bi bi-' + name"></i>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+</template>
+
+<div class="toast-stack" aria-live="polite">
+  <template x-for="t in toasts" :key="t.id">
+    <div class="toast" :class="t.type">
+      <i class="bi" :class="t.type === 'error' ? 'bi-exclamation-circle' : t.type === 'success' ? 'bi-check-circle' : 'bi-info-circle'"></i>
+      <span x-text="t.message"></span>
+    </div>
+  </template>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+<script src="/js/admin.js"></script>
+</body>
+</html>

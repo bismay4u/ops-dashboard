@@ -1,0 +1,288 @@
+const path = require('path');
+const fs = require('fs');
+const Database = require('better-sqlite3');
+const bcrypt = require('bcryptjs');
+
+const DATA_DIR = path.join(__dirname, '..', 'data');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+
+const db = new Database(path.join(DATA_DIR, 'dashboard.sqlite'));
+db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS dashboards (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  slug TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  sort_order INTEGER DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- A section is a named, styleable band on a dashboard (e.g. "Applications",
+-- "Bookmarks", or anything an admin invents — "Runbooks", "Vendor logins"...).
+-- display_style controls how its categories render: big cards, or a compact list.
+CREATE TABLE IF NOT EXISTS sections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  dashboard_id INTEGER NOT NULL REFERENCES dashboards(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  display_style TEXT NOT NULL DEFAULT 'cards', -- 'cards' | 'list'
+  sort_order INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS categories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  dashboard_id INTEGER NOT NULL REFERENCES dashboards(id) ON DELETE CASCADE,
+  section_id INTEGER REFERENCES sections(id) ON DELETE SET NULL,
+  name TEXT NOT NULL,
+  sort_order INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  dashboard_id INTEGER NOT NULL REFERENCES dashboards(id) ON DELETE CASCADE,
+  category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  icon TEXT DEFAULT 'bi-link-45deg',
+  description TEXT DEFAULT '',
+  sort_order INTEGER DEFAULT 0,
+  status_check INTEGER DEFAULT 0,
+  status_url TEXT,
+  last_status TEXT DEFAULT 'unknown', -- unknown | up | down
+  last_checked TEXT,
+  last_response_ms INTEGER,
+  visibility TEXT NOT NULL DEFAULT 'authenticated' -- 'public' | 'authenticated' | 'roles'
+);
+
+CREATE TABLE IF NOT EXISTS status_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  status TEXT NOT NULL,
+  response_ms INTEGER,
+  checked_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Roles are the single mechanism for both admin-console access and content
+-- visibility: a user can hold any number of roles. Holding the reserved role
+-- "admin" grants the admin console and sees everything regardless of other rules.
+CREATE TABLE IF NOT EXISTS roles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT UNIQUE NOT NULL,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS user_roles (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+  PRIMARY KEY (user_id, role_id)
+);
+
+CREATE TABLE IF NOT EXISTS dashboard_roles (
+  dashboard_id INTEGER NOT NULL REFERENCES dashboards(id) ON DELETE CASCADE,
+  role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+  PRIMARY KEY (dashboard_id, role_id)
+);
+
+CREATE TABLE IF NOT EXISTS item_roles (
+  item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+  PRIMARY KEY (item_id, role_id)
+);
+
+CREATE TABLE IF NOT EXISTS ip_mappings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ip TEXT UNIQUE NOT NULL,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  note TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS item_favorites (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  created_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(user_id, item_id)
+);
+
+CREATE TABLE IF NOT EXISTS item_usage (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  last_used_at TEXT,
+  UNIQUE(user_id, item_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_items_dashboard ON items(dashboard_id);
+CREATE INDEX IF NOT EXISTS idx_categories_dashboard ON categories(dashboard_id);
+CREATE INDEX IF NOT EXISTS idx_sections_dashboard ON sections(dashboard_id);
+CREATE INDEX IF NOT EXISTS idx_status_log_item ON status_log(item_id, checked_at);
+CREATE INDEX IF NOT EXISTS idx_favorites_user ON item_favorites(user_id);
+CREATE INDEX IF NOT EXISTS idx_usage_user ON item_usage(user_id);
+`);
+
+// ---------- safe migrations: add/backfill columns and tables for DBs from earlier versions ----------
+function ensureColumn(table, column, ddl) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+  if (!cols.includes(column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+    console.log(`[migrate] added ${table}.${column}`);
+  }
+  return cols.includes(column);
+}
+function hasColumn(table, column) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().some(c => c.name === column);
+}
+
+// Pre-v4 DBs had dashboards.visibility as free text ('public' | 'authenticated' | a
+// team name) and no roles system at all. Bring those forward into real roles.
+ensureColumn('dashboards', 'visibility', `visibility TEXT NOT NULL DEFAULT 'authenticated'`);
+const hadOldTeamColumn = hasColumn('users', 'team');
+const hadOldRoleColumn = hasColumn('users', 'role');
+const hadOldSectionColumn = hasColumn('categories', 'section');
+
+function getOrCreateRole(name) {
+  const existing = db.prepare('SELECT id FROM roles WHERE name = ?').get(name);
+  if (existing) return existing.id;
+  return db.prepare('INSERT INTO roles (name) VALUES (?)').run(name).lastInsertRowid;
+}
+
+const migrate = db.transaction(() => {
+  // Always make sure the "admin" role exists — it's load-bearing (grants console + sees all).
+  getOrCreateRole('admin');
+
+  // Migrate old single role/team columns on users, if this DB predates the roles system.
+  if (hadOldRoleColumn || hadOldTeamColumn) {
+    const oldUsers = db.prepare(`SELECT id${hadOldRoleColumn ? ', role' : ''}${hadOldTeamColumn ? ', team' : ''} FROM users`).all();
+    for (const u of oldUsers) {
+      const alreadyHasRoles = db.prepare('SELECT 1 FROM user_roles WHERE user_id = ?').get(u.id);
+      if (alreadyHasRoles) continue;
+      if (hadOldRoleColumn && u.role === 'admin') {
+        db.prepare('INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)').run(u.id, getOrCreateRole('admin'));
+      }
+      if (hadOldTeamColumn && u.team) {
+        db.prepare('INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)').run(u.id, getOrCreateRole(u.team));
+      }
+    }
+    if (hadOldRoleColumn) console.log('[migrate] users.role → roles/user_roles');
+    if (hadOldTeamColumn) console.log('[migrate] users.team → roles/user_roles');
+  }
+
+  // Migrate old free-text visibility values (a team name string) on dashboards/items
+  // into visibility='roles' + a linking row, now that visibility is a fixed enum.
+  for (const table of ['dashboards', 'items']) {
+    const linkTable = table === 'dashboards' ? 'dashboard_roles' : 'item_roles';
+    const fk = table === 'dashboards' ? 'dashboard_id' : 'item_id';
+    const rows = db.prepare(`SELECT id, visibility FROM ${table} WHERE visibility NOT IN ('public','authenticated','roles')`).all();
+    for (const row of rows) {
+      const roleId = getOrCreateRole(row.visibility);
+      db.prepare(`UPDATE ${table} SET visibility = 'roles' WHERE id = ?`).run(row.id);
+      db.prepare(`INSERT OR IGNORE INTO ${linkTable} (${fk}, role_id) VALUES (?, ?)`).run(row.id, roleId);
+    }
+    if (rows.length) console.log(`[migrate] ${table}.visibility free-text team names → roles (${rows.length} rows)`);
+  }
+
+  // Sections: pre-v4 DBs tagged categories with a free-text section ('applications' |
+  // 'bookmarks') instead of a real sections table. Create the two equivalent sections
+  // per dashboard and repoint categories at them.
+  if (hadOldSectionColumn) {
+    ensureColumn('categories', 'section_id', 'section_id INTEGER REFERENCES sections(id)');
+    const dashboardIds = db.prepare('SELECT DISTINCT dashboard_id FROM categories').all().map(r => r.dashboard_id);
+    for (const dashboardId of dashboardIds) {
+      const cardsSection = db.prepare(`INSERT INTO sections (dashboard_id, name, display_style, sort_order) VALUES (?, 'Applications', 'cards', 0)`).run(dashboardId).lastInsertRowid;
+      const listSection = db.prepare(`INSERT INTO sections (dashboard_id, name, display_style, sort_order) VALUES (?, 'Bookmarks', 'list', 1)`).run(dashboardId).lastInsertRowid;
+      db.prepare(`UPDATE categories SET section_id = ? WHERE dashboard_id = ? AND section = 'applications' AND section_id IS NULL`).run(cardsSection, dashboardId);
+      db.prepare(`UPDATE categories SET section_id = ? WHERE dashboard_id = ? AND section_id IS NULL`).run(listSection, dashboardId);
+    }
+    console.log(`[migrate] categories.section (text) → sections table (${dashboardIds.length} dashboards)`);
+  } else {
+    ensureColumn('categories', 'section_id', 'section_id INTEGER REFERENCES sections(id)');
+  }
+});
+migrate();
+
+// Bootstrap: create a default admin user + one sample dashboard on first run
+const userCount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
+if (userCount === 0) {
+  const username = process.env.DEFAULT_ADMIN_USERNAME || 'admin';
+  const password = process.env.DEFAULT_ADMIN_PASSWORD || 'change-me-immediately';
+  const hash = bcrypt.hashSync(password, 10);
+  const info = db.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)').run(username, hash);
+  db.prepare('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)').run(info.lastInsertRowid, getOrCreateRole('admin'));
+  console.log(`[bootstrap] Created default admin user "${username}". Change the password immediately.`);
+}
+
+const dashboardCount = db.prepare('SELECT COUNT(*) AS c FROM dashboards').get().c;
+if (dashboardCount === 0) {
+  const info = db.prepare('INSERT INTO dashboards (slug, name, sort_order, visibility) VALUES (?, ?, ?, ?)')
+    .run('main', 'Main Dashboard', 0, 'public');
+  const dashboardId = info.lastInsertRowid;
+  const cardsSection = db.prepare(`INSERT INTO sections (dashboard_id, name, display_style, sort_order) VALUES (?, 'Applications', 'cards', 0)`).run(dashboardId).lastInsertRowid;
+  const listSection = db.prepare(`INSERT INTO sections (dashboard_id, name, display_style, sort_order) VALUES (?, 'Bookmarks', 'list', 1)`).run(dashboardId).lastInsertRowid;
+  const catApps = db.prepare('INSERT INTO categories (dashboard_id, section_id, name, sort_order) VALUES (?, ?, ?, ?)')
+    .run(dashboardId, cardsSection, 'Applications', 0).lastInsertRowid;
+  const catTools = db.prepare('INSERT INTO categories (dashboard_id, section_id, name, sort_order) VALUES (?, ?, ?, ?)')
+    .run(dashboardId, listSection, 'Tools', 0).lastInsertRowid;
+  db.prepare(`INSERT INTO items (dashboard_id, category_id, name, url, icon, description, sort_order, status_check, status_url, visibility)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(dashboardId, catApps, 'Example App', 'https://example.com', 'bi-star', 'Replace me via the admin console', 0, 1, 'https://example.com', 'public');
+  db.prepare(`INSERT INTO items (dashboard_id, category_id, name, url, icon, description, sort_order, status_check, status_url, visibility)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(dashboardId, catTools, 'Admin Console', '/admin.html', 'bi-gear', 'Manage dashboards, users, and IP mappings', 0, 0, null, 'authenticated');
+  console.log('[bootstrap] Created sample "Main Dashboard" — edit or delete it from /admin.html');
+}
+
+// ---------- shared helpers ----------
+
+// Role names held by a user, e.g. ['admin', 'finance']. Call once per request and
+// attach to req.user (see middleware/auth.js) rather than re-querying repeatedly.
+function rolesForUser(userId) {
+  return db.prepare(`SELECT r.name FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = ?`)
+    .all(userId).map(r => r.name);
+}
+
+// visibility: 'public' (anyone, no login) | 'authenticated' (any signed-in user) |
+// 'roles' (only users holding at least one of entityRoleNames). `user` is req.user
+// (may be null/undefined) and must already have a `.roles` array attached.
+function canSee(visibility, user, entityRoleNames) {
+  if (visibility === 'public') return true;
+  if (!user) return false;
+  const userRoles = user.roles || [];
+  if (userRoles.includes('admin')) return true; // admins always see everything
+  if (visibility === 'authenticated') return true;
+  if (visibility === 'roles') {
+    if (!entityRoleNames || !entityRoleNames.length) return false;
+    return entityRoleNames.some(r => userRoles.includes(r));
+  }
+  return false;
+}
+
+// Batch-fetch role names for every dashboard, keyed by dashboard id — avoids N+1
+// queries when filtering a full list.
+function roleNameMap(linkTable, fkColumn, ids) {
+  if (!ids.length) return {};
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = db.prepare(`
+    SELECT lt.${fkColumn} AS entity_id, r.name AS role_name
+    FROM ${linkTable} lt JOIN roles r ON r.id = lt.role_id
+    WHERE lt.${fkColumn} IN (${placeholders})
+  `).all(...ids);
+  const map = {};
+  for (const row of rows) {
+    (map[row.entity_id] = map[row.entity_id] || []).push(row.role_name);
+  }
+  return map;
+}
+
+module.exports = db;
+module.exports.canSee = canSee;
+module.exports.rolesForUser = rolesForUser;
+module.exports.roleNameMap = roleNameMap;

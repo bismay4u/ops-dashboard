@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ops Dashboard</title>
+<meta name="theme-color" content="#7c3aed">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body x-data="dashboardApp()" x-init="init()" @keydown.window="onGlobalKeydown($event)">
+
+  <template x-if="!authChecked">
+    <div class="empty-state" style="padding-top:6rem;">Loading…</div>
+  </template>
+
+  <!-- ================= MAIN SHELL — visible to anonymous AND signed-in visitors ================= -->
+  <template x-if="authChecked">
+    <div>
+      <div class="topline"></div>
+      <nav class="navbar-glass">
+        <div class="navbar-inner">
+          <div class="brand">OPS<span class="dot">.</span>DASH</div>
+
+          <template x-if="dashboards.length > 1">
+            <div class="dash-tabs">
+              <template x-for="d in dashboards" :key="d.slug">
+                <button class="dash-tab" :class="{active: d.slug === activeSlug}" @click="loadDashboard(d.slug)" x-text="d.name"></button>
+              </template>
+            </div>
+          </template>
+
+          <div class="nav-search" style="position:relative;">
+            <i class="bi bi-search"></i>
+            <input type="text" placeholder="Search everything…" @focus="openPalette()" readonly aria-label="Search apps and bookmarks">
+            <span class="search-kbd">/</span>
+            <template x-if="showSearchHint">
+              <div class="search-hint">
+                <span>Press <strong>/</strong> anytime to search</span>
+                <button @click="dismissSearchHint()" aria-label="Dismiss hint">✕</button>
+              </div>
+            </template>
+          </div>
+
+          <div class="nav-actions" style="position:relative;">
+            <button class="icon-btn" @click.stop="themeMenuOpen = !themeMenuOpen" title="Theme" aria-label="Change theme" aria-haspopup="true" :aria-expanded="themeMenuOpen">
+              <i class="bi" :class="themeIcon"></i>
+            </button>
+            <div class="theme-menu" x-show="themeMenuOpen" x-cloak @click.away="themeMenuOpen = false" style="right:0;top:2.7rem;" role="menu">
+              <button :class="{active: theme==='light'}" @click="setTheme('light')"><span class="theme-swatch" style="background:#f3f2f7;"></span> Light</button>
+              <button :class="{active: theme==='dark'}" @click="setTheme('dark')"><span class="theme-swatch" style="background:#14102b;"></span> Dark</button>
+              <button :class="{active: theme==='glass'}" @click="setTheme('glass')"><span class="theme-swatch" style="background:linear-gradient(135deg,#4c2a86,#7c3aed);"></span> Glass</button>
+            </div>
+
+            <template x-if="user">
+              <div style="position:relative;">
+                <button class="user-chip" @click.stop="accountMenuOpen = !accountMenuOpen" aria-haspopup="true" :aria-expanded="accountMenuOpen">
+                  <span class="avatar" x-text="user.username.slice(0,1).toUpperCase()"></span>
+                  <span x-text="user.username"></span>
+                  <i class="bi bi-chevron-down" style="font-size:0.65rem;"></i>
+                </button>
+                <div class="theme-menu" x-show="accountMenuOpen" x-cloak @click.away="accountMenuOpen = false" style="right:0;top:2.7rem;min-width:210px;" role="menu">
+                  <button @click="accountMenuOpen=false; accountModalOpen=true"><i class="bi bi-key"></i> Change password</button>
+                  <template x-if="user.roles && user.roles.includes('admin')">
+                    <a href="/admin.html" style="display:flex;align-items:center;gap:0.5rem;padding:0.45rem 0.6rem;border-radius:8px;text-decoration:none;color:var(--ink);font-size:0.85rem;"><i class="bi bi-gear"></i> Admin console</a>
+                  </template>
+                  <button @click="logout()"><i class="bi bi-box-arrow-right"></i> Sign out</button>
+                  <button @click="logout(true)"><i class="bi bi-shield-x"></i> Sign out &amp; forget this device</button>
+                </div>
+              </div>
+            </template>
+            <template x-if="!user">
+              <button class="btn-sm primary" @click="loginModalOpen = true"><i class="bi bi-box-arrow-in-right"></i> Sign in</button>
+            </template>
+          </div>
+        </div>
+      </nav>
+
+      <div class="shell">
+        <div class="page-header">
+          <div class="page-header-title">
+            <h1 class="hero-title" x-text="greeting"></h1>
+            <span class="eyebrow" x-text="today"></span>
+          </div>
+          <template x-if="hasCardItems()">
+            <div style="display:flex;gap:0.3rem;align-items:center;">
+              <span class="eyebrow" style="margin-right:0.3rem;">Sort</span>
+              <button class="dash-tab" :class="{active: sortMode==='name'}" @click="sortMode='name'">Name</button>
+              <button class="dash-tab" :class="{active: sortMode==='recent'}" @click="sortMode='recent'" :disabled="!user" :title="!user ? 'Sign in to track your last-used apps' : ''">Last used</button>
+            </div>
+          </template>
+        </div>
+
+        <template x-if="!user">
+          <p style="font-size:0.85rem;color:var(--ink-soft);margin:-0.4rem 0 0.85rem;">
+            You're viewing what's public. <a href="#" @click.prevent="loginModalOpen = true" style="color:var(--accent);">Sign in</a> to see more, pin favorites, and track your recently used apps.
+          </p>
+        </template>
+
+        <template x-if="loadingDashboard">
+          <div class="empty-state">Loading…</div>
+        </template>
+
+        <template x-if="!loadingDashboard && activeData">
+          <div>
+            <!-- Pinned favorites strip -->
+            <template x-if="user && pinnedItems().length">
+              <div>
+                <h2 class="section-heading"><i class="bi bi-star-fill" style="font-size:0.9rem;color:#f5b400;"></i>&nbsp;Pinned</h2>
+                <div class="pinned-strip">
+                  <template x-for="item in pinnedItems()" :key="'pin-' + item.id">
+                    <div class="app-card">
+                      <a :href="item.url" target="_blank" rel="noopener" class="app-card-hit" @click="markUsed(item)" :aria-label="'Open ' + item.name"></a>
+                      <span class="icon"><i :class="'bi ' + (item.icon || 'bi-link-45deg')"></i></span>
+                      <span class="meta">
+                        <span class="name" x-text="item.name"></span>
+                        <span class="url" x-text="displayUrl(item.url)"></span>
+                      </span>
+                      <template x-if="item.status_check">
+                        <span class="status-dot" :class="statusFor(item.id)"></span>
+                      </template>
+                      <button class="favorite-star active" @click.stop.prevent="toggleFavorite(item)" aria-label="Remove from favorites"><i class="bi bi-star-fill"></i></button>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
+
+            <!-- Sections — a dashboard's own set of named, styleable groups (managed
+                 from the admin console). Each is rendered as either card-grid or a
+                 compact list, per its own display_style. -->
+            <template x-for="section in nonEmptySections()" :key="section.id">
+              <div>
+                <template x-if="section.display_style === 'cards'">
+                  <div>
+                    <template x-for="cat in section.categories.filter(c => c.items.length)" :key="cat.id">
+                      <div>
+                        <h2 class="section-heading">
+                          <button class="collapse-toggle" :class="{collapsed: isCollapsed(cat.id)}" @click="toggleCategory(cat.id)" :aria-label="isCollapsed(cat.id) ? 'Expand ' + cat.name : 'Collapse ' + cat.name"><i class="bi bi-chevron-down"></i></button>
+                          <span x-text="cat.name"></span>
+                        </h2>
+                        <div class="card-grid" x-show="!isCollapsed(cat.id)">
+                          <template x-for="item in sortedItems(cat.items)" :key="item.id">
+                            <div class="app-card">
+                              <a :href="item.url" target="_blank" rel="noopener" class="app-card-hit" @click="markUsed(item)" :aria-label="'Open ' + item.name"></a>
+                              <span class="icon"><i :class="'bi ' + (item.icon || 'bi-link-45deg')"></i></span>
+                              <span class="meta">
+                                <span class="name" x-text="item.name"></span>
+                                <span class="url" x-text="displayUrl(item.url)"></span>
+                                <template x-if="item.last_used_at">
+                                  <span style="display:block;font-size:0.68rem;color:var(--ink-soft);font-family:var(--font-mono);" x-text="'Used ' + relativeTime(item.last_used_at)"></span>
+                                </template>
+                              </span>
+                              <template x-if="item.status_check">
+                                <span class="status-dot" :class="statusFor(item.id)"></span>
+                              </template>
+                              <template x-if="user">
+                                <button class="favorite-star" :class="{active: item.is_favorite}" @click.stop.prevent="toggleFavorite(item)" :aria-label="item.is_favorite ? 'Remove from favorites' : 'Add to favorites'">
+                                  <i class="bi" :class="item.is_favorite ? 'bi-star-fill' : 'bi-star'"></i>
+                                </button>
+                              </template>
+                            </div>
+                          </template>
+                        </div>
+                      </div>
+                    </template>
+                  </div>
+                </template>
+
+                <template x-if="section.display_style === 'list'">
+                  <div>
+                    <h2 class="section-heading" x-text="section.name"></h2>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:0 2rem;">
+                      <template x-for="cat in section.categories.filter(c => c.items.length)" :key="cat.id">
+                        <div>
+                          <div class="category-label-row">
+                            <button class="collapse-toggle" :class="{collapsed: isCollapsed(cat.id)}" @click="toggleCategory(cat.id)" :aria-label="isCollapsed(cat.id) ? 'Expand ' + cat.name : 'Collapse ' + cat.name"><i class="bi bi-chevron-down"></i></button>
+                            <div class="category-label" x-text="cat.name"></div>
+                          </div>
+                          <div style="display:flex;flex-direction:column;gap:0.35rem;margin-bottom:0.5rem;" x-show="!isCollapsed(cat.id)">
+                            <template x-for="item in cat.items" :key="item.id">
+                              <div class="bookmark-row">
+                                <a :href="item.url" target="_blank" rel="noopener" @click="markUsed(item)"
+                                   style="display:flex;align-items:center;gap:0.5rem;text-decoration:none;color:var(--ink);font-size:0.9rem;padding:0.15rem 0;flex:1;min-width:0;">
+                                  <i :class="'bi ' + (item.icon || 'bi-link-45deg')" style="color:var(--accent);font-size:0.85rem;"></i>
+                                  <span x-text="item.name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+                                </a>
+                                <template x-if="user">
+                                  <button class="favorite-star" :class="{active: item.is_favorite}" @click.stop.prevent="toggleFavorite(item)" :aria-label="item.is_favorite ? 'Remove from favorites' : 'Add to favorites'">
+                                    <i class="bi" :class="item.is_favorite ? 'bi-star-fill' : 'bi-star'"></i>
+                                  </button>
+                                </template>
+                              </div>
+                            </template>
+                          </div>
+                        </div>
+                      </template>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </template>
+
+            <template x-if="!hasAnyItems()">
+              <div class="empty-state">
+                <i class="bi bi-grid" style="font-size:1.5rem;"></i>
+                <p style="margin-top:0.5rem;" x-text="user ? 'Nothing here yet. Add apps and bookmarks from the admin console.' : 'Nothing public here yet — sign in if you should have access.'"></p>
+              </div>
+            </template>
+          </div>
+        </template>
+      </div>
+    </div>
+  </template>
+
+  <!-- ================= LOGIN MODAL ================= -->
+  <template x-if="loginModalOpen">
+    <div class="modal-backdrop" @click.self="loginModalOpen = false">
+      <div class="modal" style="max-width:380px;" role="dialog" aria-modal="true" aria-label="Sign in">
+        <h3>Sign in</h3>
+        <template x-if="loginError">
+          <div style="color:var(--down);font-size:0.85rem;margin-bottom:0.75rem;" x-text="loginError"></div>
+        </template>
+        <form @submit.prevent="login()">
+          <div class="field"><label>Username</label><input type="text" x-model="loginForm.username" autocomplete="username" required></div>
+          <div class="field"><label>Password</label><input type="password" x-model="loginForm.password" autocomplete="current-password" required></div>
+          <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.82rem;color:var(--ink-soft);margin:0.6rem 0;cursor:pointer;">
+            <input type="checkbox" x-model="loginForm.mapIp">
+            Remember this device (skip login next time)
+          </label>
+          <button class="btn-accent" type="submit" :disabled="loginLoading">
+            <span x-text="loginLoading ? 'Signing in…' : 'Sign in'"></span>
+          </button>
+        </form>
+        <p style="font-size:0.75rem;color:var(--ink-soft);margin-top:1rem;line-height:1.5;">
+          Your IP is <span style="font-family:var(--font-mono)" x-text="clientIp || '—'"></span>.
+          <template x-if="loginForm.mapIp">
+            <span>Signing in will map this IP to your account, so this device won't need to log in again.</span>
+          </template>
+          <template x-if="!loginForm.mapIp">
+            <span>This device won't be remembered — you'll need to log in again next time.</span>
+          </template>
+        </p>
+      </div>
+    </div>
+  </template>
+
+  <!-- ================= ACCOUNT / CHANGE PASSWORD MODAL ================= -->
+  <template x-if="accountModalOpen">
+    <div class="modal-backdrop" @click.self="accountModalOpen = false">
+      <div class="modal" style="max-width:380px;" role="dialog" aria-modal="true" aria-label="Change password">
+        <h3>Change password</h3>
+        <template x-if="accountError">
+          <div style="color:var(--down);font-size:0.85rem;margin-bottom:0.75rem;" x-text="accountError"></div>
+        </template>
+        <form @submit.prevent="changePassword()">
+          <div class="field"><label>Current password</label><input type="password" x-model="accountForm.currentPassword" autocomplete="current-password" required></div>
+          <div class="field"><label>New password</label><input type="password" x-model="accountForm.newPassword" autocomplete="new-password" minlength="8" required></div>
+          <div class="modal-actions" style="justify-content:stretch;">
+            <button class="btn-accent" type="submit" :disabled="accountLoading">
+              <span x-text="accountLoading ? 'Saving…' : 'Save new password'"></span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </template>
+
+  <!-- ================= OMNISEARCH PALETTE ================= -->
+  <template x-if="paletteOpen">
+    <div class="palette-backdrop" @click.self="closePalette()">
+      <div class="palette" @keydown.escape="closePalette()" role="dialog" aria-modal="true" aria-label="Search">
+        <input type="text" class="palette-input" placeholder="Search apps and bookmarks…"
+               x-model="searchQuery" @input.debounce.150ms="runSearch()" x-ref="paletteInput"
+               @keydown.down.prevent="moveActive(1)" @keydown.up.prevent="moveActive(-1)"
+               @keydown.enter.prevent="openActive()" aria-label="Search query">
+        <div class="palette-results">
+          <template x-if="searchQuery && searchResults.length === 0">
+            <div style="padding:1rem 1.2rem;color:var(--ink-soft);font-size:0.85rem;">No matches for "<span x-text="searchQuery"></span>"</div>
+          </template>
+          <template x-for="(r, idx) in searchResults" :key="r.id + '-' + r.dashboard_slug">
+            <a :href="r.url" target="_blank" rel="noopener" class="palette-item" :class="{active: idx === activeIdx}" @click="markUsed(r)">
+              <i :class="'bi ' + (r.icon || 'bi-link-45deg') + ' icon'"></i>
+              <span style="flex:1;min-width:0;">
+                <div x-text="r.name"></div>
+                <div class="sub" x-text="(r.category_name || 'uncategorized') + ' · ' + r.dashboard_name"></div>
+              </span>
+            </a>
+          </template>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- ================= TOASTS ================= -->
+  <div class="toast-stack" aria-live="polite">
+    <template x-for="t in toasts" :key="t.id">
+      <div class="toast" :class="t.type">
+        <i class="bi" :class="t.type === 'error' ? 'bi-exclamation-circle' : t.type === 'success' ? 'bi-check-circle' : 'bi-info-circle'"></i>
+        <span x-text="t.message"></span>
+      </div>
+    </template>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>
