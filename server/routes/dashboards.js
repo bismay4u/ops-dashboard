@@ -1,6 +1,6 @@
 const express = require('express');
 const db = require('../db');
-const { canSee, roleNameMap } = require('../db');
+const { canSee, roleNameMap, canSeeNotes, noteUserIdMap } = require('../db');
 const { requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
@@ -24,6 +24,15 @@ function fullDashboard(dashboard, user) {
 
   const itemRoleNames = roleNameMap('item_roles', 'item_id', items.map(i => i.id));
   items = items.filter(it => canSee(it.visibility, user, itemRoleNames[it.id]));
+
+  // notes text must never reach a viewer who isn't authorized for it — replace it
+  // with booleans the UI uses to decide whether to show a "view notes" button at
+  // all; the actual text is only ever fetched on demand via GET items/:id/notes.
+  const noteUserIds = noteUserIdMap(items.map(i => i.id));
+  items = items.map(it => {
+    const { notes, ...rest } = it;
+    return { ...rest, has_notes: !!notes, can_view_notes: canSeeNotes(it, user, noteUserIds[it.id]) };
+  });
 
   if (user) {
     const favSet = new Set(
@@ -105,13 +114,35 @@ router.get('/search/query', (req, res) => {
   const dashboardRoleNames = roleNameMap('dashboard_roles', 'dashboard_id', dashboardIds);
   const itemRoleNamesMap = roleNameMap('item_roles', 'item_id', rows.map(r => r.id));
 
-  const results = rows
-    .filter(r => canSee(r.dashboard_visibility, req.user, dashboardRoleNames[r.dashboard_id])
-              && canSee(r.visibility, req.user, itemRoleNamesMap[r.id]))
+  const visible = rows.filter(r => canSee(r.dashboard_visibility, req.user, dashboardRoleNames[r.dashboard_id])
+    && canSee(r.visibility, req.user, itemRoleNamesMap[r.id]));
+  const noteUserIds = noteUserIdMap(visible.map(r => r.id));
+  const results = visible
     .slice(0, 50)
-    .map(({ dashboard_visibility, ...r }) => r);
+    .map(({ dashboard_visibility, notes, ...r }) => ({
+      ...r,
+      has_notes: !!notes,
+      can_view_notes: canSeeNotes({ notes, notes_visibility: r.notes_visibility }, req.user, noteUserIds[r.id]),
+    }));
 
   res.json({ results });
+});
+
+// GET /api/dashboards/items/:id/notes -> the on-demand notes text, fetched only when
+// the viewer actually clicks to reveal it. Re-checks visibility AND notes access
+// server-side rather than trusting the has_notes/can_view_notes booleans the main
+// payload already sent — those are for UI decisions only, not an access grant.
+router.get('/items/:id/notes', requireAuth, (req, res) => {
+  const item = db.prepare('SELECT items.*, dashboards.visibility AS dashboard_visibility, dashboards.id AS dashboard_id FROM items JOIN dashboards ON dashboards.id = items.dashboard_id WHERE items.id = ?').get(req.params.id);
+  if (!item) return res.status(404).json({ error: 'not_found' });
+  const dashboardRoleNames = roleNameMap('dashboard_roles', 'dashboard_id', [item.dashboard_id])[item.dashboard_id];
+  const itemRoleNames = roleNameMap('item_roles', 'item_id', [item.id])[item.id];
+  if (!canSee(item.dashboard_visibility, req.user, dashboardRoleNames) || !canSee(item.visibility, req.user, itemRoleNames)) {
+    return res.status(404).json({ error: 'not_found' });
+  }
+  const noteUserIds = noteUserIdMap([item.id])[item.id];
+  if (!canSeeNotes(item, req.user, noteUserIds)) return res.status(404).json({ error: 'not_found' });
+  res.json({ notes: item.notes });
 });
 
 // POST /api/dashboards/items/:id/touch -> record that THIS viewer just opened this item

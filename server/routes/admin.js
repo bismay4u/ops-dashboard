@@ -1,5 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const path = require('path');
+const { exec } = require('child_process');
 const db = require('../db');
 const { requireAdmin } = require('../middleware/auth');
 
@@ -18,6 +20,11 @@ function setRoleLinks(linkTable, fkColumn, entityId, roleIds) {
 }
 function rolesFor(linkTable, fkColumn, entityId) {
   return db.prepare(`SELECT r.id, r.name FROM ${linkTable} lt JOIN roles r ON r.id = lt.role_id WHERE lt.${fkColumn} = ?`).all(entityId);
+}
+function setNoteUserLinks(itemId, userIds) {
+  db.prepare('DELETE FROM item_note_users WHERE item_id = ?').run(itemId);
+  const insert = db.prepare('INSERT INTO item_note_users (item_id, user_id) VALUES (?, ?)');
+  for (const userId of userIds || []) insert.run(itemId, userId);
 }
 
 // ---------- Roles ----------
@@ -148,7 +155,8 @@ router.put('/items/:id', (req, res) => {
   db.prepare(`
     UPDATE items SET
       category_id = ?, name = ?, url = ?, icon = ?, description = ?,
-      sort_order = ?, status_check = ?, status_url = ?, visibility = ?
+      sort_order = ?, status_check = ?, status_url = ?, visibility = ?,
+      notes = ?, notes_visibility = ?
     WHERE id = ?
   `).run(
     f.category_id !== undefined ? f.category_id : existing.category_id,
@@ -160,9 +168,12 @@ router.put('/items/:id', (req, res) => {
     f.status_check !== undefined ? (f.status_check ? 1 : 0) : existing.status_check,
     f.status_url !== undefined ? f.status_url : existing.status_url,
     f.visibility !== undefined ? f.visibility : existing.visibility,
+    f.notes !== undefined ? f.notes : existing.notes,
+    f.notes_visibility !== undefined ? f.notes_visibility : existing.notes_visibility,
     req.params.id
   );
   if (f.role_ids !== undefined) setRoleLinks('item_roles', 'item_id', req.params.id, f.role_ids);
+  if (f.note_user_ids !== undefined) setNoteUserLinks(req.params.id, f.note_user_ids);
   res.json({ ok: true });
 });
 
@@ -173,6 +184,11 @@ router.delete('/items/:id', (req, res) => {
 
 router.get('/items/:id/roles', (req, res) => {
   res.json({ role_ids: rolesFor('item_roles', 'item_id', req.params.id).map(r => r.id) });
+});
+
+router.get('/items/:id/notes-users', (req, res) => {
+  const rows = db.prepare('SELECT user_id FROM item_note_users WHERE item_id = ?').all(req.params.id);
+  res.json({ note_user_ids: rows.map(r => r.user_id) });
 });
 
 // ---------- Users ----------
@@ -376,6 +392,37 @@ router.post('/dashboards/:id/import', (req, res) => {
 
   tx();
   res.json({ ok: true });
+});
+
+// ---------- branding ----------
+// Partial update — only touches fields present in the body, same style as PUT
+// /users/:id above. Any field may be explicitly null to clear it back to unset.
+router.put('/settings', (req, res) => {
+  const fields = ['app_title', 'logo_data', 'background_data', 'watermark_data', 'watermark_opacity', 'accent_color'];
+  const updates = fields.filter(f => req.body && Object.prototype.hasOwnProperty.call(req.body, f));
+  if (updates.length) {
+    const setClause = updates.map(f => `${f} = ?`).join(', ');
+    db.prepare(`UPDATE branding SET ${setClause} WHERE id = 1`).run(...updates.map(f => req.body[f]));
+  }
+  res.json({ ok: true });
+});
+
+// ---------- update ----------
+// Fixed command sequence only — no user-supplied input reaches the shell. Only
+// restarts on a successful pull; a conflicted/failed pull leaves the running
+// process alone so a bad update doesn't take the site down.
+router.post('/update', (req, res) => {
+  const repoRoot = path.join(__dirname, '..', '..');
+  exec('git pull origin main', { cwd: repoRoot, timeout: 60000 }, (err, stdout, stderr) => {
+    if (err) return res.status(500).json({ ok: false, step: 'git_pull', error: err.message, stdout, stderr });
+    res.json({ ok: true, stdout, stderr, restarting: true });
+    setTimeout(() => {
+      // pm2 sets pm_id on any process it manages, regardless of configured app name —
+      // no assumption baked in about how this particular deployment is run.
+      if (process.env.pm_id) exec(`pm2 restart ${process.env.pm_id}`);
+      else process.exit(0); // no pm2 — rely on systemd/docker/manual restart
+    }, 300);
+  });
 });
 
 module.exports = router;

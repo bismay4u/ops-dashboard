@@ -15,6 +15,35 @@ function dashboardApp() {
       this.themeMenuOpen = false;
     },
 
+    // branding — site-wide, admin-configured (Admin → Branding), applies before login
+    appTitle: 'Ops Dashboard',
+    logoUrl: null,
+    watermarkUrl: null,
+    watermarkOpacity: 0.08,
+    async loadBranding() {
+      try {
+        const b = await fetch('/api/settings').then(r => r.json());
+        this.applyBranding(b);
+      } catch (e) { /* branding is cosmetic — a failed fetch just keeps defaults */ }
+    },
+    applyBranding(b) {
+      this.appTitle = b.app_title || 'Ops Dashboard';
+      document.title = this.appTitle;
+      const root = document.documentElement.style;
+      if (b.accent_color) {
+        root.setProperty('--accent', b.accent_color);
+        root.setProperty('--accent-soft', hexToRgba(b.accent_color, 0.12));
+      } else {
+        root.removeProperty('--accent');
+        root.removeProperty('--accent-soft');
+      }
+      if (b.background_data) root.setProperty('--bg-image', `url(${b.background_data})`);
+      else root.removeProperty('--bg-image');
+      this.logoUrl = b.logo_data || null;
+      this.watermarkUrl = b.watermark_data || null;
+      this.watermarkOpacity = b.watermark_opacity ?? 0.08;
+    },
+
     // auth — user can legitimately be null; anonymous visitors see public content.
     authChecked: false,
     user: null,
@@ -29,6 +58,34 @@ function dashboardApp() {
     accountForm: { currentPassword: '', newPassword: '' },
     accountError: null,
     accountLoading: false,
+
+    // on-demand item notes
+    notesModalOpen: false,
+    notesModalName: '',
+    notesModalText: '',
+    notesLoading: false,
+    async openNotes(item) {
+      this.notesModalName = item.name;
+      this.notesModalText = '';
+      this.notesLoading = true;
+      this.notesModalOpen = true;
+      try {
+        const res = await fetch(`/api/dashboards/items/${item.id}/notes`, { credentials: 'include' });
+        this.notesModalText = res.ok ? (await res.json()).notes : 'You do not have access to view this.';
+      } catch (e) {
+        this.notesModalText = 'Could not load notes.';
+      } finally {
+        this.notesLoading = false;
+      }
+    },
+    async copyNotes() {
+      try {
+        await navigator.clipboard.writeText(this.notesModalText);
+        this.pushToast('Copied to clipboard', 'success');
+      } catch (e) {
+        this.pushToast('Could not copy — select and copy manually.', 'error');
+      }
+    },
 
     // dashboards
     dashboards: [],
@@ -68,6 +125,7 @@ function dashboardApp() {
 
     async init() {
       document.documentElement.setAttribute('data-theme', this.theme);
+      await this.loadBranding();
       this.registerServiceWorker();
       await this.checkAuth();
       // Dashboards load regardless of login — the API filters by visibility itself,
@@ -363,4 +421,11 @@ function dashboardApp() {
       }
     },
   };
+}
+
+function hexToRgba(hex, alpha) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  if (!m) return hex;
+  const [r, g, b] = m.slice(1).map(x => parseInt(x, 16));
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }

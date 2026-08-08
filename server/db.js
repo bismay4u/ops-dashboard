@@ -97,6 +97,15 @@ CREATE TABLE IF NOT EXISTS item_roles (
   PRIMARY KEY (item_id, role_id)
 );
 
+-- Grants for items.notes when notes_visibility = 'users' — separate from item_roles
+-- since notes are an on-demand reveal to hand-picked people, not a role-based
+-- visibility rule.
+CREATE TABLE IF NOT EXISTS item_note_users (
+  item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY (item_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS ip_mappings (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ip TEXT UNIQUE NOT NULL,
@@ -119,6 +128,19 @@ CREATE TABLE IF NOT EXISTS item_usage (
   item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
   last_used_at TEXT,
   UNIQUE(user_id, item_id)
+);
+
+-- Site-wide branding, a single row (id is pinned to 1). Images are stored as data
+-- URLs so the whole app stays backed up by data/dashboard.sqlite alone — no separate
+-- uploads directory to remember to persist.
+CREATE TABLE IF NOT EXISTS branding (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  app_title TEXT DEFAULT 'Ops Dashboard',
+  logo_data TEXT,
+  background_data TEXT,
+  watermark_data TEXT,
+  watermark_opacity REAL DEFAULT 0.08,
+  accent_color TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_items_dashboard ON items(dashboard_id);
@@ -146,6 +168,8 @@ function hasColumn(table, column) {
 // team name) and no roles system at all. Bring those forward into real roles.
 ensureColumn('dashboards', 'visibility', `visibility TEXT NOT NULL DEFAULT 'authenticated'`);
 ensureColumn('users', 'deleted_at', 'deleted_at TEXT DEFAULT NULL');
+ensureColumn('items', 'notes', 'notes TEXT');
+ensureColumn('items', 'notes_visibility', `notes_visibility TEXT NOT NULL DEFAULT 'all'`);
 const hadOldTeamColumn = hasColumn('users', 'team');
 const hadOldRoleColumn = hasColumn('users', 'role');
 const hadOldSectionColumn = hasColumn('categories', 'section');
@@ -209,6 +233,8 @@ const migrate = db.transaction(() => {
   }
 });
 migrate();
+
+db.prepare('INSERT OR IGNORE INTO branding (id) VALUES (1)').run();
 
 // Bootstrap: create a default admin user + one sample dashboard on first run
 const userCount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
@@ -283,7 +309,34 @@ function roleNameMap(linkTable, fkColumn, ids) {
   return map;
 }
 
+// Notes are a separate, always-login-required reveal — no 'public' option like
+// canSee's visibility, since this exists specifically for controlled info (demo
+// credentials etc.), not general content gating.
+function canSeeNotes(item, user, noteUserIds) {
+  if (!item.notes) return false;
+  if (!user) return false;
+  if ((user.roles || []).includes('admin')) return true;
+  if (item.notes_visibility === 'all') return true;
+  if (item.notes_visibility === 'users') return (noteUserIds || []).includes(user.id);
+  return false;
+}
+
+// Batch-fetch which user ids are granted an item's notes, keyed by item id — same
+// shape as roleNameMap, for the 'users' notes_visibility case.
+function noteUserIdMap(itemIds) {
+  if (!itemIds.length) return {};
+  const placeholders = itemIds.map(() => '?').join(',');
+  const rows = db.prepare(`SELECT item_id, user_id FROM item_note_users WHERE item_id IN (${placeholders})`).all(...itemIds);
+  const map = {};
+  for (const row of rows) {
+    (map[row.item_id] = map[row.item_id] || []).push(row.user_id);
+  }
+  return map;
+}
+
 module.exports = db;
 module.exports.canSee = canSee;
 module.exports.rolesForUser = rolesForUser;
 module.exports.roleNameMap = roleNameMap;
+module.exports.canSeeNotes = canSeeNotes;
+module.exports.noteUserIdMap = noteUserIdMap;

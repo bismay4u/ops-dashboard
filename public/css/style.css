@@ -130,7 +130,20 @@ body {
   color: var(--ink);
   white-space: nowrap;
 }
-.brand .dot { color: var(--accent); }
+.brand-logo { max-height: 28px; display: block; }
+
+/* Fixed behind the nav/cards (which have their own opaque surfaces) so it only
+   shows through empty page background — no z-index tricks needed beyond a low
+   value, since nothing else in the page goes lower. */
+.watermark-layer {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  z-index: 0;
+}
 
 .nav-search {
   flex: 1;
@@ -521,6 +534,7 @@ body {
   padding: 0.55rem 0.7rem; border-radius: 8px; border: 1px solid var(--border);
   font-family: var(--font-body); background: var(--surface); color: var(--ink);
 }
+.field input[type=color] { padding: 0; height: 2.1rem; width: 2.1rem; border-radius: 6px; }
 .field input:focus, .field select:focus, .field textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 1.25rem; }
 
@@ -598,6 +612,10 @@ body {
 .app-card:hover .favorite-star, .favorite-star.active { opacity: 1; }
 .favorite-star.active { color: #f5b400; }
 .favorite-star:hover { color: #f5b400; }
+/* Sits to the left of the favorite star (same top offset) so the two don't stack
+   when an item has both notes and a favorite toggle available. */
+.app-card .notes-btn { right: 2.2rem; }
+.app-card .notes-btn:hover { color: var(--accent); }
 .bookmark-row { position: relative; display: flex; align-items: center; gap: 0.4rem; }
 .bookmark-row .favorite-star { position: static; opacity: 0.35; width: 20px; height: 20px; font-size: 0.72rem; }
 .bookmark-row:hover .favorite-star, .bookmark-row .favorite-star.active { opacity: 1; }

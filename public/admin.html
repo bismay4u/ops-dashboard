@@ -12,6 +12,8 @@
 </head>
 <body x-data="adminApp()" x-init="init()">
 
+<img x-show="watermarkUrl" :src="watermarkUrl" :style="'opacity:' + watermarkOpacity" class="watermark-layer" alt="" aria-hidden="true">
+
 <template x-if="authChecked && (!user || !user.roles.includes('admin'))">
   <div class="login-shell">
     <div class="login-card">
@@ -27,7 +29,8 @@
 <template x-if="authChecked && user && user.roles.includes('admin')">
 <div class="admin-layout">
   <aside class="admin-sidebar">
-    <div class="brand">OPS<span class="dot" style="color:var(--accent);">.</span>DASH</div>
+    <template x-if="logoUrl"><img :src="logoUrl" class="brand-logo" alt="Logo"></template>
+    <template x-if="!logoUrl"><div class="brand" x-text="appTitle"></div></template>
     <nav class="admin-nav">
       <button :class="{active: tab==='dashboards'}" @click="tab='dashboards'"><i class="bi bi-grid-1x2"></i> Dashboards</button>
       <button :class="{active: tab==='items'}" @click="tab='items'"><i class="bi bi-app-indicator"></i> Items</button>
@@ -36,6 +39,8 @@
       <button :class="{active: tab==='ip'}" @click="tab='ip'"><i class="bi bi-router"></i> IP Mappings</button>
       <button :class="{active: tab==='status'}" @click="tab='status'"><i class="bi bi-activity"></i> Live Status</button>
       <button :class="{active: tab==='backup'}" @click="tab='backup'"><i class="bi bi-cloud-arrow-down"></i> Backup / JSON</button>
+      <button :class="{active: tab==='branding'}" @click="tab='branding'"><i class="bi bi-palette"></i> Branding</button>
+      <button :class="{active: tab==='update'}" @click="tab='update'"><i class="bi bi-arrow-repeat"></i> Update</button>
     </nav>
     <div style="margin-top:auto;display:flex;flex-direction:column;gap:0.4rem;">
       <button class="btn-sm" @click="themeMenuOpen = !themeMenuOpen" style="justify-content:center;" aria-haspopup="true" :aria-expanded="themeMenuOpen">
@@ -369,6 +374,92 @@
       </div>
     </template>
 
+    <!-- ===================== BRANDING ===================== -->
+    <template x-if="tab==='branding'">
+      <div>
+        <div class="panel-header"><h2>Branding</h2></div>
+        <p class="help-text" style="margin-bottom:1.25rem;">
+          Applies site-wide, for every visitor, signed in or not — same as the theme
+          toggle. Images are capped at 3MB each.
+        </p>
+        <div class="admin-panel">
+          <div class="field">
+            <label>Application title</label>
+            <input x-model="branding.app_title" placeholder="Ops Dashboard">
+          </div>
+
+          <div class="field">
+            <label>Logo</label>
+            <div style="display:flex;align-items:center;gap:0.75rem;">
+              <template x-if="branding.logo_data"><img :src="branding.logo_data" style="max-height:40px;max-width:160px;"></template>
+              <input type="file" accept="image/*" @change="handleBrandingImage('logo_data', $event)">
+              <button class="btn-sm" x-show="branding.logo_data" @click="branding.logo_data = null">Remove</button>
+            </div>
+          </div>
+
+          <!-- <div class="field">
+            <label>Background image</label>
+            <div style="display:flex;align-items:center;gap:0.75rem;">
+              <template x-if="branding.background_data"><img :src="branding.background_data" style="max-height:60px;max-width:160px;object-fit:cover;border-radius:8px;"></template>
+              <input type="file" accept="image/*" @change="handleBrandingImage('background_data', $event)">
+              <button class="btn-sm" x-show="branding.background_data" @click="branding.background_data = null">Remove</button>
+            </div>
+          </div> -->
+
+          <div class="field">
+            <label>Watermark image</label>
+            <div style="display:flex;align-items:center;gap:0.75rem;">
+              <template x-if="branding.watermark_data"><img :src="branding.watermark_data" style="max-height:60px;max-width:160px;object-fit:contain;"></template>
+              <input type="file" accept="image/*" @change="handleBrandingImage('watermark_data', $event)">
+              <button class="btn-sm" x-show="branding.watermark_data" @click="branding.watermark_data = null">Remove</button>
+            </div>
+          </div>
+          <div class="field" x-show="branding.watermark_data">
+            <label>Watermark opacity — <span x-text="Math.round(branding.watermark_opacity * 100) + '%'"></span></label>
+            <input type="range" min="0" max="1" step="0.01" x-model.number="branding.watermark_opacity">
+          </div>
+
+          <div class="field">
+            <label>Accent color</label>
+            <div style="display:flex;align-items:center;gap:0.75rem;">
+              <input type="color" :value="branding.accent_color || '#7c3aed'" @input="branding.accent_color = $event.target.value">
+              <button class="btn-sm" x-show="branding.accent_color" @click="branding.accent_color = null">Use theme default</button>
+            </div>
+          </div>
+
+          <button class="btn-sm primary" @click="saveBranding()"><i class="bi bi-check-lg"></i> Save branding</button>
+        </div>
+      </div>
+    </template>
+
+    <!-- ===================== UPDATE ===================== -->
+    <template x-if="tab==='update'">
+      <div>
+        <div class="panel-header"><h2>Updates and Restarts the App</h2></div>
+        <div class="status-note">
+          <i class="bi bi-info-circle"></i>
+          <div>
+            Gets the latest version of the app from the main codebase and restarts the app so the updates take effect.
+            <br>
+            > The app is only restarted if the update completes successfully. If the update fails or there’s a conflict, the app keeps running as it is.
+            <br>
+            > If the app is managed by an automatic service, that service will handle restarting it. Otherwise, it may need to be started again manually.
+          </div>
+        </div>
+        <div class="admin-panel">
+          <button class="btn-sm primary" :disabled="updateRunning" @click="runUpdate()">
+            <i class="bi bi-cloud-download"></i> <span x-text="updateRunning ? 'Pulling…' : 'Pull & restart'"></span>
+          </button>
+          <template x-if="updateResult">
+            <div style="margin-top:1rem;">
+              <div class="pill" :class="updateResult.ok ? 'up' : 'down'" x-text="updateResult.ok ? 'Success — restarting' : 'Failed'"></div>
+              <pre style="margin-top:0.6rem;white-space:pre-wrap;font-family:var(--font-mono);font-size:0.78rem;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:0.75rem;max-height:300px;overflow-y:auto;" x-text="(updateResult.stdout || '') + (updateResult.stderr || '') + (updateResult.error || '')"></pre>
+            </div>
+          </template>
+        </div>
+      </div>
+    </template>
+
   </main>
 </div>
 </template>
@@ -499,6 +590,36 @@
           </div>
         </div>
       </template>
+
+      <div class="field">
+        <label>Notes</label>
+        <textarea x-model="form.notes" rows="3" placeholder="e.g. demo account credentials — hidden by default, revealed on demand" style="width:100%;font-family:var(--font-mono);font-size:0.8rem;"></textarea>
+        <span class="help-text" style="margin-top:0.3rem;">Not shown on the card — visitors reveal it with a click, only if they're allowed to see it.</span>
+      </div>
+      <template x-if="form.notes">
+        <div class="field">
+          <label>Who can see the notes</label>
+          <select x-model="form.notes_visibility">
+            <option value="all">Any signed-in user</option>
+            <option value="users">Specific users</option>
+          </select>
+        </div>
+      </template>
+      <template x-if="form.notes && form.notes_visibility === 'users'">
+        <div class="field">
+          <label>Users who can see it</label>
+          <div style="display:flex;flex-wrap:wrap;gap:0.4rem;">
+            <template x-for="u in users" :key="'inu-'+u.id">
+              <label style="display:flex;align-items:center;gap:0.3rem;font-size:0.82rem;border:1px solid var(--border);border-radius:7px;padding:0.3rem 0.55rem;cursor:pointer;">
+                <input type="checkbox" :checked="form.note_user_ids.includes(u.id)" @change="toggleFormNoteUser(u.id)">
+                <span x-text="u.username"></span>
+              </label>
+            </template>
+            <template x-if="!users.length"><span class="help-text">No users yet — add one on the Users tab.</span></template>
+          </div>
+        </div>
+      </template>
+
       <div class="modal-actions">
         <button class="btn-sm" @click="closeModal()">Cancel</button>
         <button class="btn-sm primary" @click="saveItem()" x-text="editingId ? 'Save' : 'Create'"></button>

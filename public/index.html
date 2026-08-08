@@ -15,6 +15,8 @@
 </head>
 <body x-data="dashboardApp()" x-init="init()" @keydown.window="onGlobalKeydown($event)">
 
+  <img x-show="watermarkUrl" :src="watermarkUrl" :style="'opacity:' + watermarkOpacity" class="watermark-layer" alt="" aria-hidden="true">
+
   <template x-if="!authChecked">
     <div class="empty-state" style="padding-top:6rem;">Loading…</div>
   </template>
@@ -25,7 +27,8 @@
       <div class="topline"></div>
       <nav class="navbar-glass">
         <div class="navbar-inner">
-          <div class="brand">OPS<span class="dot">.</span>DASH</div>
+          <template x-if="logoUrl"><img :src="logoUrl" class="brand-logo" alt="Logo"></template>
+          <template x-if="!logoUrl"><div class="brand" x-text="appTitle"></div></template>
 
           <template x-if="dashboards.length > 1">
             <div class="dash-tabs">
@@ -126,6 +129,9 @@
                       <template x-if="item.status_check">
                         <span class="status-dot" :class="statusFor(item.id)"></span>
                       </template>
+                      <template x-if="item.has_notes && item.can_view_notes">
+                        <button class="favorite-star notes-btn" @click.stop.prevent="openNotes(item)" aria-label="View notes"><i class="bi bi-sticky"></i></button>
+                      </template>
                       <button class="favorite-star active" @click.stop.prevent="toggleFavorite(item)" aria-label="Remove from favorites"><i class="bi bi-star-fill"></i></button>
                     </div>
                   </template>
@@ -163,6 +169,9 @@
                               <template x-if="item.status_check">
                                 <span class="status-dot" :class="statusFor(item.id)"></span>
                               </template>
+                              <template x-if="item.has_notes && item.can_view_notes">
+                                <button class="favorite-star notes-btn" @click.stop.prevent="openNotes(item)" aria-label="View notes"><i class="bi bi-sticky"></i></button>
+                              </template>
                               <template x-if="user">
                                 <button class="favorite-star" :class="{active: item.is_favorite}" @click.stop.prevent="toggleFavorite(item)" :aria-label="item.is_favorite ? 'Remove from favorites' : 'Add to favorites'">
                                   <i class="bi" :class="item.is_favorite ? 'bi-star-fill' : 'bi-star'"></i>
@@ -194,6 +203,9 @@
                                   <i :class="'bi ' + (item.icon || 'bi-link-45deg')" style="color:var(--accent);font-size:0.85rem;"></i>
                                   <span x-text="item.name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
                                 </a>
+                                <template x-if="item.has_notes && item.can_view_notes">
+                                  <button class="favorite-star notes-btn" @click.stop.prevent="openNotes(item)" aria-label="View notes"><i class="bi bi-sticky"></i></button>
+                                </template>
                                 <template x-if="user">
                                   <button class="favorite-star" :class="{active: item.is_favorite}" @click.stop.prevent="toggleFavorite(item)" :aria-label="item.is_favorite ? 'Remove from favorites' : 'Add to favorites'">
                                     <i class="bi" :class="item.is_favorite ? 'bi-star-fill' : 'bi-star'"></i>
@@ -271,6 +283,25 @@
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  </template>
+
+  <!-- ================= NOTES MODAL ================= -->
+  <template x-if="notesModalOpen">
+    <div class="modal-backdrop" @click.self="notesModalOpen = false">
+      <div class="modal" style="max-width:420px;" role="dialog" aria-modal="true" aria-label="Notes">
+        <h3 x-text="notesModalName"></h3>
+        <template x-if="notesLoading">
+          <div class="empty-state" style="padding:1rem 0;">Loading…</div>
+        </template>
+        <template x-if="!notesLoading">
+          <p style="white-space:pre-wrap;font-family:var(--font-mono);font-size:0.85rem;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:0.75rem;" x-text="notesModalText"></p>
+        </template>
+        <div class="modal-actions">
+          <button class="btn-sm" @click="notesModalOpen = false">Close</button>
+          <button class="btn-sm primary" :disabled="notesLoading" @click="copyNotes()"><i class="bi bi-clipboard"></i> Copy</button>
+        </div>
       </div>
     </div>
   </template>

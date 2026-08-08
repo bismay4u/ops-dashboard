@@ -51,6 +51,16 @@ function adminApp() {
     backupDashboardId: null,
     importText: '',
 
+    // branding — form state for the Branding tab, plus what's currently applied
+    appTitle: 'Ops Dashboard',
+    logoUrl: null,
+    watermarkUrl: null,
+    watermarkOpacity: 0.08,
+    branding: { app_title: '', logo_data: null, background_data: null, watermark_data: null, watermark_opacity: 0.08, accent_color: null },
+
+    updateRunning: false,
+    updateResult: null,
+
     statusIntervalLabel: '60 seconds', // display copy; actual value is server-configured
 
     toasts: [],
@@ -67,6 +77,7 @@ function adminApp() {
 
     async init() {
       document.documentElement.setAttribute('data-theme', this.theme);
+      await this.loadBranding();
       const res = await fetch('/api/auth/me', { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
@@ -79,6 +90,77 @@ function adminApp() {
         await this.loadUsers();
         await this.loadMappings();
         await this.loadIconList();
+      }
+    },
+
+    // ---------- branding ----------
+    async loadBranding() {
+      try {
+        const b = await fetch('/api/settings').then(r => r.json());
+        this.branding = {
+          app_title: b.app_title || '',
+          logo_data: b.logo_data || null,
+          background_data: b.background_data || null,
+          watermark_data: b.watermark_data || null,
+          watermark_opacity: b.watermark_opacity ?? 0.08,
+          accent_color: b.accent_color || null,
+        };
+        this.applyBranding(b);
+      } catch (e) { /* branding is cosmetic — a failed fetch just keeps defaults */ }
+    },
+    applyBranding(b) {
+      this.appTitle = b.app_title || 'Ops Dashboard';
+      document.title = this.appTitle;
+      const root = document.documentElement.style;
+      if (b.accent_color) {
+        root.setProperty('--accent', b.accent_color);
+        root.setProperty('--accent-soft', hexToRgba(b.accent_color, 0.12));
+      } else {
+        root.removeProperty('--accent');
+        root.removeProperty('--accent-soft');
+      }
+      if (b.background_data) root.setProperty('--bg-image', `url(${b.background_data})`);
+      else root.removeProperty('--bg-image');
+      this.logoUrl = b.logo_data || null;
+      this.watermarkUrl = b.watermark_data || null;
+      this.watermarkOpacity = b.watermark_opacity ?? 0.08;
+    },
+    handleBrandingImage(field, event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      if (file.size > 3 * 1024 * 1024) {
+        this.pushToast('Image must be under 3MB.', 'error');
+        event.target.value = '';
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => { this.branding[field] = reader.result; };
+      reader.readAsDataURL(file);
+      event.target.value = '';
+    },
+    async saveBranding() {
+      await this.api('/settings', { method: 'PUT', body: JSON.stringify(this.branding) });
+      this.applyBranding(this.branding);
+      this.pushToast('Branding saved', 'success');
+    },
+
+    // ---------- update ----------
+    async runUpdate() {
+      if (!confirm('Pull the latest code and restart the app now?')) return;
+      this.updateRunning = true;
+      this.updateResult = null;
+      try {
+        const res = await fetch('/api/admin/update', { method: 'POST', credentials: 'include' });
+        this.updateResult = await res.json();
+        if (this.updateResult.ok) this.pushToast('Updated — restarting now.', 'success');
+        else this.pushToast('Update failed — see output below.', 'error');
+      } catch (e) {
+        // The connection can legitimately drop mid-response if the process restarts
+        // faster than the browser finishes reading it — that's a plausible success,
+        // not necessarily a failure.
+        this.updateResult = { ok: false, error: 'Lost connection — the app may already be restarting. Refresh in a few seconds.' };
+      } finally {
+        this.updateRunning = false;
       }
     },
 
@@ -115,6 +197,11 @@ function adminApp() {
       if (idx === -1) this.form.role_ids.push(roleId);
       else this.form.role_ids.splice(idx, 1);
     },
+    toggleFormNoteUser(userId) {
+      const idx = this.form.note_user_ids.indexOf(userId);
+      if (idx === -1) this.form.note_user_ids.push(userId);
+      else this.form.note_user_ids.splice(idx, 1);
+    },
 
     // ---------- modal helpers ----------
     openModal(type, entity = null) {
@@ -122,7 +209,7 @@ function adminApp() {
         dashboard: { slug: '', name: '', visibility: 'authenticated', role_ids: [] },
         section: { name: '', display_style: 'cards' },
         category: { name: '', section_id: this.sections[0] ? this.sections[0].id : null },
-        item: { name: '', url: '', category_id: null, icon: 'bi-link-45deg', description: '', status_check: 0, visibility: 'authenticated', role_ids: [] },
+        item: { name: '', url: '', category_id: null, icon: 'bi-link-45deg', description: '', status_check: 0, visibility: 'authenticated', role_ids: [], notes: '', notes_visibility: 'all', note_user_ids: [] },
         user: { username: '', password: '', role_ids: [] },
         mapping: { ip: '', user_id: this.users[0] ? this.users[0].id : null, note: '' },
       };
@@ -297,7 +384,16 @@ function adminApp() {
     },
     async editItem(it) {
       const roleData = it.visibility === 'roles' ? await this.api(`/items/${it.id}/roles`) : { role_ids: [] };
-      this.openModal('item', { ...it, role_ids: roleData.role_ids });
+      const noteUserData = await this.api(`/items/${it.id}/notes-users`);
+      // Notes text is never in the dashboard payload (public/js/app.js fetches it
+      // on demand too) — reuse that same public endpoint here; admins are always
+      // authorized by canSeeNotes so this just works.
+      let notes = '';
+      if (it.has_notes) {
+        const res = await fetch(`/api/dashboards/items/${it.id}/notes`, { credentials: 'include' });
+        if (res.ok) notes = (await res.json()).notes || '';
+      }
+      this.openModal('item', { ...it, role_ids: roleData.role_ids, note_user_ids: noteUserData.note_user_ids, notes });
     },
     async deleteItem(it) {
       if (!confirm(`Delete "${it.name}"?`)) return;
@@ -447,4 +543,11 @@ function adminApp() {
       await this.loadDashboards();
     },
   };
+}
+
+function hexToRgba(hex, alpha) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  if (!m) return hex;
+  const [r, g, b] = m.slice(1).map(x => parseInt(x, 16));
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
