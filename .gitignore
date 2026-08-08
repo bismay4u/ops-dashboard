@@ -8,3 +8,4 @@ data/*.sqlite-shm
 logs/*
 temp/*
 *.log
+notes.txt

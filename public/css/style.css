@@ -312,11 +312,11 @@ body {
   color: var(--ink);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.app-card .url {
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  color: var(--accent);
+.app-card .description {
+  font-size: 0.72rem;
+  color: var(--ink-soft);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  display: block;
 }
 
 .status-dot {

@@ -119,7 +119,9 @@
                       <span class="icon"><i :class="'bi ' + (item.icon || 'bi-link-45deg')"></i></span>
                       <span class="meta">
                         <span class="name" x-text="item.name"></span>
-                        <span class="url" x-text="displayUrl(item.url)"></span>
+                        <template x-if="item.description">
+                          <span class="description" x-text="item.description"></span>
+                        </template>
                       </span>
                       <template x-if="item.status_check">
                         <span class="status-dot" :class="statusFor(item.id)"></span>
@@ -151,7 +153,9 @@
                               <span class="icon"><i :class="'bi ' + (item.icon || 'bi-link-45deg')"></i></span>
                               <span class="meta">
                                 <span class="name" x-text="item.name"></span>
-                                <span class="url" x-text="displayUrl(item.url)"></span>
+                                <template x-if="item.description">
+                                  <span class="description" x-text="item.description"></span>
+                                </template>
                                 <template x-if="item.last_used_at">
                                   <span style="display:block;font-size:0.68rem;color:var(--ink-soft);font-family:var(--font-mono);" x-text="'Used ' + relativeTime(item.last_used_at)"></span>
                                 </template>

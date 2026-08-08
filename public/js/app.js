@@ -237,15 +237,6 @@ function dashboardApp() {
       return catItems + (this.activeData.uncategorized ? this.activeData.uncategorized.length : 0) > 0;
     },
 
-    displayUrl(url) {
-      try {
-        const u = new URL(url, window.location.origin);
-        return u.host + (u.pathname !== '/' ? u.pathname : '');
-      } catch {
-        return url;
-      }
-    },
-
     relativeTime(iso) {
       // iso comes from SQLite datetime('now'), which is UTC without a timezone
       // suffix — append 'Z' so Date parses it as UTC instead of local time.
