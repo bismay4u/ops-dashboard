@@ -19,7 +19,7 @@ router.post('/login', (req, res) => {
     return res.status(400).json({ error: 'username_and_password_required' });
   }
 
-  const row = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+  const row = db.prepare('SELECT * FROM users WHERE username = ? AND deleted_at IS NULL').get(username);
   if (!row || !bcrypt.compareSync(password, row.password_hash)) {
     return res.status(401).json({ error: 'invalid_credentials' });
   }

@@ -28,7 +28,7 @@ function resolveUser(req, res, next) {
   req.user = null;
 
   const mapping = db.prepare(
-    `SELECT u.* FROM ip_mappings m JOIN users u ON u.id = m.user_id WHERE m.ip = ?`
+    `SELECT u.* FROM ip_mappings m JOIN users u ON u.id = m.user_id WHERE m.ip = ? AND u.deleted_at IS NULL`
   ).get(ip);
 
   if (mapping) {
@@ -41,7 +41,7 @@ function resolveUser(req, res, next) {
   if (token) {
     const payload = verifyToken(token);
     if (payload) {
-      const user = db.prepare('SELECT * FROM users WHERE id = ?').get(payload.id);
+      const user = db.prepare('SELECT * FROM users WHERE id = ? AND deleted_at IS NULL').get(payload.id);
       if (user) {
         req.user = attachRoles(user);
         req.authMethod = 'session';

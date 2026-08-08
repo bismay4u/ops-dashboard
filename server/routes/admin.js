@@ -177,10 +177,22 @@ router.get('/items/:id/roles', (req, res) => {
 
 // ---------- Users ----------
 router.get('/users', (req, res) => {
-  const users = db.prepare('SELECT id, username, created_at FROM users ORDER BY username').all();
+  const users = db.prepare('SELECT id, username, created_at FROM users WHERE deleted_at IS NULL ORDER BY username').all();
   for (const u of users) {
     const roles = rolesFor('user_roles', 'user_id', u.id);
     u.role_ids = roles.map(r => r.id);
+    u.role_names = roles.map(r => r.name);
+  }
+  res.json({ users });
+});
+
+// Soft-deleted users — listed separately so they can be restored. Their user_roles
+// and ip_mappings rows are left untouched by DELETE /users/:id below, so restoring
+// just clears deleted_at and everything (roles, remembered devices) comes back as-is.
+router.get('/users/deleted', (req, res) => {
+  const users = db.prepare('SELECT id, username, created_at, deleted_at FROM users WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC').all();
+  for (const u of users) {
+    const roles = rolesFor('user_roles', 'user_id', u.id);
     u.role_names = roles.map(r => r.name);
   }
   res.json({ users });
@@ -199,6 +211,39 @@ router.post('/users', (req, res) => {
   }
 });
 
+// Bulk-create users from parsed CSV rows: [{ username, password, roles: ['admin', ...] }].
+// Role names not yet on this instance are created automatically (same precedent as
+// dashboard JSON import above). Returns a per-row result so the admin can see exactly
+// which rows were created vs skipped vs rejected, instead of an opaque overall status.
+router.post('/users/import', (req, res) => {
+  const { rows = [] } = req.body || {};
+  const results = [];
+  db.transaction(() => {
+    for (const row of rows) {
+      const username = (row.username || '').trim();
+      const password = row.password || '';
+      if (!username || !password) {
+        results.push({ username: username || '(blank)', status: 'error', error: 'username_and_password_required' });
+        continue;
+      }
+      if (password.length < 8) {
+        results.push({ username, status: 'error', error: 'password_too_short' });
+        continue;
+      }
+      if (db.prepare('SELECT id FROM users WHERE username = ?').get(username)) {
+        results.push({ username, status: 'skipped', error: 'username_taken' });
+        continue;
+      }
+      const roleIds = (row.roles || []).filter(Boolean).map(getOrCreateRoleId);
+      const hash = bcrypt.hashSync(password, 10);
+      const info = db.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)').run(username, hash);
+      setRoleLinks('user_roles', 'user_id', info.lastInsertRowid, roleIds);
+      results.push({ username, status: 'created' });
+    }
+  })();
+  res.json({ results });
+});
+
 router.put('/users/:id', (req, res) => {
   const { password, role_ids } = req.body || {};
   if (password) {
@@ -210,8 +255,16 @@ router.put('/users/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// Soft delete: marks the account deleted_at instead of removing the row, so login and
+// IP auto-login both stop recognizing them (see middleware/auth.js, routes/auth.js)
+// while their roles and IP mappings stay intact for POST /users/:id/restore below.
 router.delete('/users/:id', (req, res) => {
-  db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
+  db.prepare("UPDATE users SET deleted_at = datetime('now') WHERE id = ?").run(req.params.id);
+  res.json({ ok: true });
+});
+
+router.post('/users/:id/restore', (req, res) => {
+  db.prepare('UPDATE users SET deleted_at = NULL WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
 });
 

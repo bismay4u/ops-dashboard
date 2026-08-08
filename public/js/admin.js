@@ -42,6 +42,11 @@ function adminApp() {
 
     users: [],
     mappings: [],
+    importUsersModalOpen: false,
+    importUsersText: '',
+    importUsersResults: null,
+    deletedUsersModalOpen: false,
+    deletedUsers: [],
 
     backupDashboardId: null,
     importText: '',
@@ -262,8 +267,8 @@ function adminApp() {
       const dash = await fetch(`/api/dashboards/${slug}`, { credentials: 'include' }).then(r => r.json());
       this.categoriesForItems = dash.sections.flatMap(s => s.categories.map(({ items, ...c }) => c));
       this.items = [...dash.sections.flatMap(s => s.categories.flatMap(c => c.items)), ...dash.uncategorized];
-      // role_ids aren't part of the public dashboard payload; fetch lazily per-item when its
-      // visibility pill is clicked (editItemVisibility), stored as _role_ids for the pill summary.
+      // role_ids aren't part of the public dashboard payload; fetch lazily per-item here,
+      // stored as _role_ids for the visibility pill summary.
       for (const it of this.items) {
         if (it.visibility === 'roles' && it._role_ids === undefined) {
           this.api(`/items/${it.id}/roles`).then(data => { it._role_ids = data.role_ids; });
@@ -290,7 +295,7 @@ function adminApp() {
       await this.api(`/items/${id}`, { method: 'PUT', body: JSON.stringify(fields) });
       await this.loadItemsFor(this.itemsDashboardId);
     },
-    async editItemVisibility(it) {
+    async editItem(it) {
       const roleData = it.visibility === 'roles' ? await this.api(`/items/${it.id}/roles`) : { role_ids: [] };
       this.openModal('item', { ...it, role_ids: roleData.role_ids });
     },
@@ -338,11 +343,69 @@ function adminApp() {
       await this.loadUsers();
     },
     async deleteUser(u) {
-      if (!confirm(`Delete user "${u.username}"? Their IP mappings will also be removed.`)) return;
+      if (!confirm(`Delete user "${u.username}"? Their roles and IP mappings are kept, and this can be undone from Deleted users.`)) return;
       await this.api(`/users/${u.id}`, { method: 'DELETE' });
       this.pushToast('User deleted', 'success');
       await this.loadUsers();
-      await this.loadMappings();
+    },
+
+    // ---------- users: deleted / restore ----------
+    async loadDeletedUsers() {
+      const data = await this.api('/users/deleted');
+      this.deletedUsers = data.users;
+    },
+    async openDeletedUsersModal() {
+      await this.loadDeletedUsers();
+      this.deletedUsersModalOpen = true;
+    },
+    async restoreUser(u) {
+      await this.api(`/users/${u.id}/restore`, { method: 'POST' });
+      this.pushToast(`Restored "${u.username}"`, 'success');
+      await this.loadDeletedUsers();
+      await this.loadUsers();
+    },
+
+    // ---------- users: CSV import ----------
+    openImportUsersModal() {
+      this.importUsersText = '';
+      this.importUsersResults = null;
+      this.importUsersModalOpen = true;
+    },
+    handleUsersCsvFile(event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => { this.importUsersText = reader.result; };
+      reader.readAsText(file);
+      event.target.value = '';
+    },
+    parseUsersCsv(text) {
+      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      if (!lines.length) return [];
+      const header = lines[0].split(',').map(h => h.trim().toLowerCase());
+      const uIdx = header.indexOf('username');
+      const pIdx = header.indexOf('password');
+      const rIdx = header.indexOf('roles');
+      return lines.slice(1).map(line => {
+        const cols = line.split(',');
+        return {
+          username: (cols[uIdx] || '').trim(),
+          password: (cols[pIdx] || '').trim(),
+          roles: rIdx >= 0 ? (cols[rIdx] || '').split(';').map(r => r.trim()).filter(Boolean) : [],
+        };
+      });
+    },
+    async importUsers() {
+      const rows = this.parseUsersCsv(this.importUsersText);
+      if (!rows.length) { this.pushToast('Nothing to import — paste or upload a CSV first.', 'error'); return; }
+      const data = await this.api('/users/import', { method: 'POST', body: JSON.stringify({ rows }) });
+      this.importUsersResults = data.results;
+      const created = data.results.filter(r => r.status === 'created').length;
+      const skipped = data.results.filter(r => r.status === 'skipped').length;
+      const errored = data.results.filter(r => r.status === 'error').length;
+      this.pushToast(`${created} created, ${skipped} skipped, ${errored} errors`, errored ? 'error' : 'success');
+      await this.loadUsers();
+      await this.loadRoles();
     },
 
     // ---------- ip mappings ----------

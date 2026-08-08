@@ -177,7 +177,7 @@
                   <td><i :class="'bi ' + it.icon" style="color:var(--accent);"></i></td>
                   <td><input :value="it.url" @change="updateItem(it.id, {url: $event.target.value})" style="width:160px;font-family:var(--font-mono);font-size:0.75rem;"></td>
                   <td x-text="categoryName(it.category_id)"></td>
-                  <td><button class="btn-sm" @click="editItemVisibility(it)"><span class="pill" x-text="visibilitySummary(it.visibility, it._role_ids)"></span></button></td>
+                  <td><span class="pill" x-text="visibilitySummary(it.visibility, it._role_ids)"></span></td>
                   <td>
                     <select :value="it.status_check" @change="updateItem(it.id, {status_check: Number($event.target.value)})">
                       <option value="0">Off</option>
@@ -185,7 +185,10 @@
                     </select>
                   </td>
                   <td><span class="pill" :class="it.last_status" x-text="it.last_status"></span></td>
-                  <td><button class="btn-sm danger" @click="deleteItem(it)"><i class="bi bi-trash"></i></button></td>
+                  <td style="display:flex;gap:0.4rem;">
+                    <button class="btn-sm" @click="editItem(it)" aria-label="Edit item"><i class="bi bi-pencil"></i></button>
+                    <button class="btn-sm danger" @click="deleteItem(it)"><i class="bi bi-trash"></i></button>
+                  </td>
                 </tr>
               </template>
             </tbody>
@@ -235,7 +238,11 @@
       <div>
         <div class="panel-header">
           <h2>Users</h2>
-          <button class="btn-sm primary" @click="openModal('user')"><i class="bi bi-plus-lg"></i> New user</button>
+          <div style="display:flex;gap:0.5rem;">
+            <button class="btn-sm" @click="openDeletedUsersModal()"><i class="bi bi-trash3"></i> Deleted users</button>
+            <button class="btn-sm" @click="openImportUsersModal()"><i class="bi bi-upload"></i> Import CSV</button>
+            <button class="btn-sm primary" @click="openModal('user')"><i class="bi bi-plus-lg"></i> New user</button>
+          </div>
         </div>
         <div class="admin-panel">
           <table class="admin-table">
@@ -450,9 +457,9 @@
       <div class="field"><label>URL</label><input x-model="form.url" placeholder="https://projects.example.net"></div>
       <div class="field">
         <label>Category</label>
-        <select x-model.number="form.category_id">
-          <option :value="null">— none —</option>
-          <template x-for="c in categoriesForItems" :key="c.id"><option :value="c.id" x-text="c.name"></option></template>
+        <select @change="form.category_id = $event.target.value ? Number($event.target.value) : null">
+          <option value="" :selected="form.category_id === null">— none —</option>
+          <template x-for="c in categoriesForItems" :key="c.id"><option :value="c.id" :selected="form.category_id === c.id" x-text="c.name"></option></template>
         </select>
       </div>
       <div class="field">
@@ -546,6 +553,85 @@
       <div class="modal-actions">
         <button class="btn-sm" @click="closeModal()">Cancel</button>
         <button class="btn-sm primary" @click="createMapping()">Map</button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<template x-if="importUsersModalOpen">
+  <div class="modal-backdrop" @click.self="importUsersModalOpen = false">
+    <div class="modal" style="max-width:520px;">
+      <h3>Import users from CSV</h3>
+      <div class="status-note">
+        <i class="bi bi-info-circle"></i>
+        <div>
+          Header row required: <code>username,password,roles</code>. <code>roles</code> is optional per row —
+          separate multiple roles with <code>;</code> (e.g. <code>finance;ops</code>). Roles that don't exist yet
+          are created automatically. Passwords need at least 8 characters. Plain comma-separated values only — no
+          quoted fields, so usernames/passwords can't contain commas.
+        </div>
+      </div>
+      <div class="field">
+        <label>Upload .csv</label>
+        <input type="file" accept=".csv" @change="handleUsersCsvFile($event)">
+      </div>
+      <div class="field">
+        <label>Or paste CSV rows</label>
+        <textarea x-model="importUsersText" rows="6" placeholder="username,password,roles" style="font-family:var(--font-mono);font-size:0.78rem;width:100%;"></textarea>
+      </div>
+
+      <template x-if="importUsersResults">
+        <table class="admin-table" style="margin-top:1rem;">
+          <thead><tr><th>Username</th><th>Result</th></tr></thead>
+          <tbody>
+            <template x-for="(r, idx) in importUsersResults" :key="idx">
+              <tr>
+                <td x-text="r.username"></td>
+                <td>
+                  <span class="pill" :class="r.status === 'created' ? 'up' : 'down'"
+                        x-text="r.status === 'created' ? 'Created' : (r.error || r.status)"></span>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </template>
+
+      <div class="modal-actions">
+        <button class="btn-sm" @click="importUsersModalOpen = false">Close</button>
+        <button class="btn-sm primary" @click="importUsers()"><i class="bi bi-upload"></i> Import users</button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<template x-if="deletedUsersModalOpen">
+  <div class="modal-backdrop" @click.self="deletedUsersModalOpen = false">
+    <div class="modal" style="max-width:520px;">
+      <h3>Deleted users</h3>
+      <p class="help-text" style="margin-bottom:0.9rem;">
+        Deleting a user keeps their roles and IP mappings intact — restoring here brings them back exactly as they were.
+      </p>
+      <template x-if="!deletedUsers.length">
+        <div class="status-note"><i class="bi bi-info-circle"></i><div>No deleted users.</div></div>
+      </template>
+      <template x-if="deletedUsers.length">
+        <table class="admin-table">
+          <thead><tr><th>Username</th><th>Roles</th><th>Deleted</th><th></th></tr></thead>
+          <tbody>
+            <template x-for="u in deletedUsers" :key="u.id">
+              <tr>
+                <td x-text="u.username"></td>
+                <td><span class="pill" x-text="u.role_names.length ? u.role_names.join(', ') : 'none'"></span></td>
+                <td style="font-family:var(--font-mono);font-size:0.75rem;" x-text="u.deleted_at"></td>
+                <td><button class="btn-sm primary" @click="restoreUser(u)"><i class="bi bi-arrow-counterclockwise"></i> Restore</button></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </template>
+      <div class="modal-actions">
+        <button class="btn-sm" @click="deletedUsersModalOpen = false">Close</button>
       </div>
     </div>
   </div>

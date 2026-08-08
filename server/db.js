@@ -145,6 +145,7 @@ function hasColumn(table, column) {
 // Pre-v4 DBs had dashboards.visibility as free text ('public' | 'authenticated' | a
 // team name) and no roles system at all. Bring those forward into real roles.
 ensureColumn('dashboards', 'visibility', `visibility TEXT NOT NULL DEFAULT 'authenticated'`);
+ensureColumn('users', 'deleted_at', 'deleted_at TEXT DEFAULT NULL');
 const hadOldTeamColumn = hasColumn('users', 'team');
 const hadOldRoleColumn = hasColumn('users', 'role');
 const hadOldSectionColumn = hasColumn('categories', 'section');
