@@ -155,8 +155,27 @@ CREATE TABLE IF NOT EXISTS feedback (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+-- Generic event log backing the Admin > Analytics tab. Every trackable action in the
+-- app (page views, link clicks, favorites, logins) writes one row here as
+-- category/action, e.g. ('link','follow_link'), ('auth','login_failure'). Analytics
+-- queries group/filter this one table instead of each feature keeping its own
+-- counters — a new event type is just a new (category, action) pair, no schema change.
+CREATE TABLE IF NOT EXISTS events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  category TEXT NOT NULL,
+  action TEXT NOT NULL,
+  item_id INTEGER REFERENCES items(id) ON DELETE SET NULL,
+  label TEXT,
+  ip TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_items_dashboard ON items(dashboard_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_item ON feedback(item_id);
+CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
+CREATE INDEX IF NOT EXISTS idx_events_category_action ON events(category, action);
+CREATE INDEX IF NOT EXISTS idx_events_item ON events(item_id);
 CREATE INDEX IF NOT EXISTS idx_categories_dashboard ON categories(dashboard_id);
 CREATE INDEX IF NOT EXISTS idx_sections_dashboard ON sections(dashboard_id);
 CREATE INDEX IF NOT EXISTS idx_status_log_item ON status_log(item_id, checked_at);
@@ -351,9 +370,21 @@ function noteUserIdMap(itemIds) {
   return map;
 }
 
+// Fire-and-forget analytics write — callers never await this or let it block/fail
+// the request it's attached to; a missed event is not worth a 500.
+function logEvent({ userId = null, category, action, itemId = null, label = null, ip = null }) {
+  try {
+    db.prepare('INSERT INTO events (user_id, category, action, item_id, label, ip) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(userId, category, action, itemId, label, ip);
+  } catch (e) {
+    console.warn('[events] log failed:', e.message);
+  }
+}
+
 module.exports = db;
 module.exports.canSee = canSee;
 module.exports.rolesForUser = rolesForUser;
 module.exports.roleNameMap = roleNameMap;
 module.exports.canSeeNotes = canSeeNotes;
 module.exports.noteUserIdMap = noteUserIdMap;
+module.exports.logEvent = logEvent;

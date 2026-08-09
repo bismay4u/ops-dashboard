@@ -623,6 +623,42 @@ body {
 .bookmark-row .favorite-star { position: static; opacity: 0.35; width: 20px; height: 20px; font-size: 0.72rem; }
 .bookmark-row:hover .favorite-star, .bookmark-row .favorite-star.active { opacity: 1; }
 
+/* ---------- analytics: stat tiles, bar chart, ranked/sparkbar tables ---------- */
+.stat-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem; margin-bottom: 1.5rem;
+}
+.stat-tile {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 0.85rem 1rem;
+}
+.stat-tile .stat-value { font-size: 1.6rem; font-weight: 700; font-variant-numeric: proportional-nums; }
+.stat-tile .stat-label { font-size: 0.75rem; color: var(--ink-soft); margin-top: 0.15rem; }
+
+.chart-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 1rem 1.1rem 0.6rem; margin-bottom: 1.5rem;
+}
+.chart-card h3 { font-size: 0.9rem; margin: 0 0 0.9rem; font-weight: 600; }
+.chart-legend { display: flex; gap: 1rem; font-size: 0.75rem; color: var(--ink-soft); margin-bottom: 0.6rem; }
+.chart-legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 0.3rem; }
+
+.bar-chart { display: flex; align-items: flex-end; gap: 2px; height: 140px; }
+.bar-chart .bar-col { flex: 1; max-width: 24px; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; cursor: default; }
+.bar-chart .bar-fill { background: var(--accent); border-radius: 4px 4px 0 0; min-height: 2px; }
+.bar-chart .bar-fill.stack-bottom { border-radius: 0; background: var(--up); }
+.bar-chart .bar-fill.stack-top { border-radius: 4px 4px 0 0; background: var(--down); margin-bottom: 2px; }
+.bar-chart-axis { display: flex; gap: 2px; margin-top: 0.3rem; }
+.bar-chart-axis span {
+  flex: 1; max-width: 24px; font-size: 0.62rem; color: var(--ink-soft);
+  text-align: center; white-space: nowrap; overflow: hidden;
+}
+
+.sparkbar-row { display: flex; align-items: center; gap: 0.6rem; }
+.sparkbar-track { flex: 1; height: 8px; border-radius: 4px; background: var(--surface-hover); overflow: hidden; }
+.sparkbar-fill { height: 100%; background: var(--accent); border-radius: 4px; }
+.sparkbar-value { font-family: var(--font-mono); font-size: 0.78rem; min-width: 2.5rem; text-align: right; }
+
 /* ---------- collapsible category headers ---------- */
 .collapse-toggle {
   background: none; border: none; color: var(--ink-soft); cursor: pointer;

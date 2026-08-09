@@ -1,6 +1,6 @@
 const express = require('express');
 const db = require('../db');
-const { canSee, roleNameMap, canSeeNotes, noteUserIdMap } = require('../db');
+const { canSee, roleNameMap, canSeeNotes, noteUserIdMap, logEvent } = require('../db');
 const { requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
@@ -90,6 +90,7 @@ router.get('/:slug', (req, res) => {
   if (!dashboard) return res.status(404).json({ error: 'not_found' });
   const roleNames = roleNameMap('dashboard_roles', 'dashboard_id', [dashboard.id])[dashboard.id];
   if (!canSee(dashboard.visibility, req.user, roleNames)) return res.status(404).json({ error: 'not_found' });
+  logEvent({ userId: req.user ? req.user.id : null, category: 'view', action: 'dashboard_view', label: dashboard.slug, ip: req.clientIp });
   res.json(fullDashboard(dashboard, req.user));
 });
 
@@ -162,6 +163,7 @@ router.post('/items/:id/touch', (req, res) => {
       ON CONFLICT(user_id, item_id) DO UPDATE SET last_used_at = datetime('now')
     `).run(req.user.id, item.id);
   }
+  logEvent({ userId: req.user ? req.user.id : null, category: 'link', action: 'follow_link', itemId: item.id, ip: req.clientIp });
   res.json({ ok: true, tracked: !!req.user });
 });
 
@@ -178,9 +180,11 @@ router.post('/items/:id/favorite', requireAuth, (req, res) => {
   const existing = db.prepare('SELECT id FROM item_favorites WHERE user_id = ? AND item_id = ?').get(req.user.id, item.id);
   if (existing) {
     db.prepare('DELETE FROM item_favorites WHERE id = ?').run(existing.id);
+    logEvent({ userId: req.user.id, category: 'bookmark', action: 'remove_favorite', itemId: item.id, ip: req.clientIp });
     return res.json({ favorited: false });
   }
   db.prepare('INSERT INTO item_favorites (user_id, item_id) VALUES (?, ?)').run(req.user.id, item.id);
+  logEvent({ userId: req.user.id, category: 'bookmark', action: 'add_favorite', itemId: item.id, ip: req.clientIp });
   res.json({ favorited: true });
 });
 

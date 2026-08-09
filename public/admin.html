@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
-<link rel="stylesheet" href="/css/style.css?v=2">
+<link rel="stylesheet" href="/css/style.css?v=3">
 </head>
 <body x-data="adminApp()" x-init="init()">
 
@@ -39,6 +39,7 @@
       <button :class="{active: tab==='ip'}" @click="tab='ip'"><i class="bi bi-router"></i> IP Mappings</button>
       <button :class="{active: tab==='status'}" @click="tab='status'"><i class="bi bi-activity"></i> Live Status</button>
       <button :class="{active: tab==='feedback'}" @click="tab='feedback'; loadFeedback()"><i class="bi bi-chat-square-text"></i> Feedback</button>
+      <button :class="{active: tab==='analytics'}" @click="tab='analytics'; loadAnalytics()"><i class="bi bi-bar-chart"></i> Analytics</button>
       <button :class="{active: tab==='backup'}" @click="tab='backup'"><i class="bi bi-cloud-arrow-down"></i> Backup / JSON</button>
       <button :class="{active: tab==='branding'}" @click="tab='branding'"><i class="bi bi-palette"></i> Branding</button>
       <button :class="{active: tab==='update'}" @click="tab='update'"><i class="bi bi-arrow-repeat"></i> Update</button>
@@ -400,6 +401,223 @@
             </tbody>
           </table>
         </div>
+      </div>
+    </template>
+
+    <!-- ===================== ANALYTICS ===================== -->
+    <template x-if="tab==='analytics'">
+      <div>
+        <div class="panel-header">
+          <h2>Analytics</h2>
+          <select x-model.number="analyticsDays" @change="loadAnalytics()" style="width:auto;">
+            <option :value="7">Last 7 days</option>
+            <option :value="30">Last 30 days</option>
+            <option :value="90">Last 90 days</option>
+          </select>
+        </div>
+
+        <template x-if="analyticsLoading && !analyticsLoaded">
+          <div class="empty-state">Loading…</div>
+        </template>
+
+        <template x-if="analyticsLoaded">
+          <div>
+            <!-- Daily usage -->
+            <div class="chart-card">
+              <h3>Daily usage — active users</h3>
+              <div class="stat-grid" style="margin-bottom:0.9rem;">
+                <div class="stat-tile">
+                  <div class="stat-value" x-text="sumBy(dailyUsage, 'total_events')"></div>
+                  <div class="stat-label">Total events</div>
+                </div>
+                <div class="stat-tile">
+                  <div class="stat-value" x-text="dailyUsage.length ? Math.round(sumBy(dailyUsage, 'total_events') / dailyUsage.length) : 0"></div>
+                  <div class="stat-label">Avg events / active day</div>
+                </div>
+                <div class="stat-tile">
+                  <div class="stat-value" x-text="maxOf(dailyUsage, 'unique_users')"></div>
+                  <div class="stat-label">Peak daily active users</div>
+                </div>
+              </div>
+              <template x-if="dailyUsage.length">
+                <div>
+                  <div class="bar-chart">
+                    <template x-for="(d, idx) in dailyUsage" :key="d.day">
+                      <div class="bar-col" :title="d.day + ': ' + d.unique_users + ' unique users, ' + d.total_events + ' events'">
+                        <div class="bar-fill" :style="'height:' + pct(d.unique_users, maxOf(dailyUsage, 'unique_users')) + '%'"></div>
+                      </div>
+                    </template>
+                  </div>
+                  <div class="bar-chart-axis">
+                    <template x-for="(d, idx) in dailyUsage" :key="'ax-' + d.day">
+                      <span x-text="axisLabel(d.day, idx, dailyUsage.length)"></span>
+                    </template>
+                  </div>
+                </div>
+              </template>
+              <template x-if="!dailyUsage.length">
+                <div class="empty-state" style="padding:1rem 0;">No activity in this window yet.</div>
+              </template>
+            </div>
+
+            <!-- User activity -->
+            <div class="chart-card">
+              <div class="panel-header" style="margin-bottom:0.9rem;">
+                <h3 style="margin:0;">User activity — who's using it</h3>
+                <select x-model="userActivityFilter" style="width:auto;">
+                  <option value="all">All users</option>
+                  <option value="active">Active only</option>
+                  <option value="inactive">Inactive only</option>
+                </select>
+              </div>
+              <div class="stat-grid" style="margin-bottom:0.9rem;">
+                <div class="stat-tile">
+                  <div class="stat-value" x-text="userActivity.length"></div>
+                  <div class="stat-label">Total users</div>
+                </div>
+                <div class="stat-tile">
+                  <div class="stat-value" x-text="activeUserCount()"></div>
+                  <div class="stat-label">Active this window</div>
+                </div>
+                <div class="stat-tile">
+                  <div class="stat-value" x-text="inactiveUserCount()"></div>
+                  <div class="stat-label">Inactive this window</div>
+                </div>
+              </div>
+              <template x-if="userActivity.length">
+                <table class="admin-table">
+                  <thead><tr><th>User</th><th>Roles</th><th>Events</th><th>Logins</th><th>Last active</th><th>Status</th></tr></thead>
+                  <tbody>
+                    <template x-for="u in visibleUserActivity()" :key="u.id">
+                      <tr>
+                        <td x-text="u.username"></td>
+                        <td><span class="pill" x-text="u.roles.length ? u.roles.join(', ') : 'none'"></span></td>
+                        <td x-text="u.events_in_period"></td>
+                        <td x-text="u.logins_in_period"></td>
+                        <td style="font-family:var(--font-mono);font-size:0.75rem;" x-text="u.last_active_at || 'Never'"></td>
+                        <td><span class="pill" :class="{down: u.events_in_period===0, up: u.events_in_period>0}" x-text="u.events_in_period > 0 ? 'active' : 'inactive'"></span></td>
+                      </tr>
+                    </template>
+                    <template x-if="!visibleUserActivity().length">
+                      <tr><td colspan="6" style="color:var(--ink-soft);">No users in this view.</td></tr>
+                    </template>
+                  </tbody>
+                </table>
+              </template>
+              <template x-if="!userActivity.length">
+                <div class="empty-state" style="padding:1rem 0;">No users yet.</div>
+              </template>
+            </div>
+
+            <!-- Card / link usage -->
+            <div class="chart-card">
+              <h3>Card / link usage — most clicked</h3>
+              <div class="stat-grid" style="margin-bottom:0.9rem;">
+                <div class="stat-tile">
+                  <div class="stat-value" x-text="sumBy(itemUsage, 'clicks')"></div>
+                  <div class="stat-label">Total link opens</div>
+                </div>
+              </div>
+              <template x-if="itemUsage.length">
+                <div style="display:flex;flex-direction:column;gap:0.5rem;">
+                  <template x-for="it in itemUsage.slice(0, 15)" :key="it.item_id">
+                    <div class="sparkbar-row">
+                      <div style="width:220px;flex:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:0.85rem;" :title="it.item_name + ' (' + it.dashboard_name + ')'">
+                        <span x-text="it.item_name"></span>
+                        <span style="color:var(--ink-soft);font-size:0.72rem;" x-text="' · ' + it.dashboard_name"></span>
+                      </div>
+                      <div class="sparkbar-track"><div class="sparkbar-fill" :style="'width:' + pct(it.clicks, maxOf(itemUsage, 'clicks')) + '%'"></div></div>
+                      <div class="sparkbar-value" x-text="it.clicks"></div>
+                    </div>
+                  </template>
+                </div>
+              </template>
+              <template x-if="!itemUsage.length">
+                <div class="empty-state" style="padding:1rem 0;">No link clicks tracked in this window yet.</div>
+              </template>
+            </div>
+
+            <!-- Logins -->
+            <div class="chart-card">
+              <h3>Login analysis</h3>
+              <div class="stat-grid" style="margin-bottom:0.9rem;">
+                <div class="stat-tile">
+                  <div class="stat-value" x-text="sumBy(loginAnalytics.daily, 'success')"></div>
+                  <div class="stat-label">Successful logins</div>
+                </div>
+                <div class="stat-tile">
+                  <div class="stat-value" x-text="sumBy(loginAnalytics.daily, 'failure')"></div>
+                  <div class="stat-label">Failed logins</div>
+                </div>
+                <div class="stat-tile">
+                  <div class="stat-value" x-text="loginAnalytics.uniqueUsers"></div>
+                  <div class="stat-label">Unique users signed in</div>
+                </div>
+              </div>
+              <template x-if="loginAnalytics.daily.length">
+                <div>
+                  <div class="chart-legend">
+                    <span><span class="dot" style="background:var(--up);"></span>Success</span>
+                    <span><span class="dot" style="background:var(--down);"></span>Failed</span>
+                  </div>
+                  <div class="bar-chart">
+                    <template x-for="(d, idx) in loginAnalytics.daily" :key="d.day">
+                      <div class="bar-col" :title="d.day + ': ' + d.success + ' success, ' + d.failure + ' failed'">
+                        <div class="bar-fill stack-top" :style="'height:' + pct(d.failure, maxDailyTotal(loginAnalytics.daily)) + '%'" x-show="d.failure"></div>
+                        <div class="bar-fill stack-bottom" :style="'height:' + pct(d.success, maxDailyTotal(loginAnalytics.daily)) + '%'" x-show="d.success"></div>
+                      </div>
+                    </template>
+                  </div>
+                  <div class="bar-chart-axis">
+                    <template x-for="(d, idx) in loginAnalytics.daily" :key="'ax-' + d.day">
+                      <span x-text="axisLabel(d.day, idx, loginAnalytics.daily.length)"></span>
+                    </template>
+                  </div>
+                </div>
+              </template>
+              <template x-if="!loginAnalytics.daily.length">
+                <div class="empty-state" style="padding:1rem 0;">No login attempts in this window yet.</div>
+              </template>
+
+              <template x-if="loginAnalytics.recentFailures.length">
+                <div style="margin-top:1.1rem;">
+                  <div class="help-text" style="margin-bottom:0.5rem;">Recent failed attempts</div>
+                  <table class="admin-table">
+                    <thead><tr><th>Attempted username</th><th>IP</th><th>When</th></tr></thead>
+                    <tbody>
+                      <template x-for="(f, idx) in loginAnalytics.recentFailures" :key="idx">
+                        <tr>
+                          <td x-text="f.attempted_username"></td>
+                          <td style="font-family:var(--font-mono);" x-text="f.ip"></td>
+                          <td style="font-family:var(--font-mono);font-size:0.75rem;" x-text="f.created_at"></td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+              </template>
+            </div>
+
+            <!-- User event analysis -->
+            <div class="chart-card">
+              <h3>User event analysis</h3>
+              <template x-if="eventBreakdown.length">
+                <div style="display:flex;flex-direction:column;gap:0.5rem;">
+                  <template x-for="e in eventBreakdown" :key="e.category + '-' + e.action">
+                    <div class="sparkbar-row">
+                      <div style="width:220px;flex:none;font-size:0.85rem;" x-text="eventLabel(e)"></div>
+                      <div class="sparkbar-track"><div class="sparkbar-fill" :style="'width:' + pct(e.count, maxOf(eventBreakdown, 'count')) + '%'"></div></div>
+                      <div class="sparkbar-value" x-text="e.count"></div>
+                    </div>
+                  </template>
+                </div>
+              </template>
+              <template x-if="!eventBreakdown.length">
+                <div class="empty-state" style="padding:1rem 0;">No events tracked in this window yet.</div>
+              </template>
+            </div>
+          </div>
+        </template>
       </div>
     </template>
 

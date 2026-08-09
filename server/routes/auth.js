@@ -21,9 +21,11 @@ router.post('/login', (req, res) => {
 
   const row = db.prepare('SELECT * FROM users WHERE username = ? AND deleted_at IS NULL').get(username);
   if (!row || !bcrypt.compareSync(password, row.password_hash)) {
+    db.logEvent({ category: 'auth', action: 'login_failure', label: username, ip: req.clientIp });
     return res.status(401).json({ error: 'invalid_credentials' });
   }
   const user = { ...row, roles: db.rolesForUser(row.id) };
+  db.logEvent({ userId: user.id, category: 'auth', action: 'login_success', label: username, ip: req.clientIp });
 
   const token = signUser(user);
   res.cookie(COOKIE_NAME, token, {

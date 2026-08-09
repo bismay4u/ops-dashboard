@@ -54,6 +54,17 @@ function adminApp() {
     feedback: [],
     feedbackStatusFilter: 'open_pending', // 'open_pending' | 'all' | 'open' | 'pending' | 'closed'
 
+    // analytics
+    analyticsDays: 30,
+    analyticsLoaded: false,
+    analyticsLoading: false,
+    dailyUsage: [],
+    itemUsage: [],
+    loginAnalytics: { daily: [], uniqueUsers: 0, recentFailures: [] },
+    eventBreakdown: [],
+    userActivity: [],
+    userActivityFilter: 'all', // 'all' | 'active' | 'inactive'
+
     // branding — form state for the Branding tab, plus what's currently applied
     appTitle: 'Ops Dashboard',
     logoUrl: null,
@@ -545,6 +556,63 @@ function adminApp() {
       await this.api(`/feedback/${f.id}`, { method: 'DELETE' });
       this.pushToast('Feedback deleted', 'success');
       await this.loadFeedback();
+    },
+
+    // ---------- analytics ----------
+    async loadAnalytics() {
+      this.analyticsLoading = true;
+      try {
+        const [daily, items, logins, events, users] = await Promise.all([
+          this.api(`/analytics/daily-usage?days=${this.analyticsDays}`),
+          this.api(`/analytics/item-usage?days=${this.analyticsDays}`),
+          this.api(`/analytics/logins?days=${this.analyticsDays}`),
+          this.api(`/analytics/events?days=${this.analyticsDays}`),
+          this.api(`/analytics/users?days=${this.analyticsDays}`),
+        ]);
+        this.dailyUsage = daily.daily;
+        this.itemUsage = items.items;
+        this.loginAnalytics = logins;
+        this.eventBreakdown = events.events;
+        this.userActivity = users.users;
+        this.analyticsLoaded = true;
+      } finally {
+        this.analyticsLoading = false;
+      }
+    },
+    activeUserCount() {
+      return this.userActivity.filter(u => u.events_in_period > 0).length;
+    },
+    inactiveUserCount() {
+      return this.userActivity.filter(u => u.events_in_period === 0).length;
+    },
+    visibleUserActivity() {
+      if (this.userActivityFilter === 'active') return this.userActivity.filter(u => u.events_in_period > 0);
+      if (this.userActivityFilter === 'inactive') return this.userActivity.filter(u => u.events_in_period === 0);
+      return this.userActivity;
+    },
+    sumBy(arr, key) {
+      return arr.reduce((n, row) => n + (row[key] || 0), 0);
+    },
+    maxDailyTotal(daily) {
+      return Math.max(1, ...daily.map(d => (d.success || 0) + (d.failure || 0)), ...daily.map(d => d.total_events || 0), ...daily.map(d => d.unique_users || 0));
+    },
+    pct(value, max) {
+      return Math.max(value > 0 ? 2 : 0, Math.round((value / max) * 100));
+    },
+    shortDate(d) {
+      return new Date(d + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    },
+    // Show at most ~8 date labels under a bar chart, regardless of the window length,
+    // so a 90-day view doesn't jam unreadable labels under every single bar.
+    axisLabel(day, idx, total) {
+      const step = Math.max(1, Math.ceil(total / 8));
+      return idx % step === 0 ? this.shortDate(day) : '';
+    },
+    maxOf(arr, key) {
+      return Math.max(1, ...arr.map(row => row[key] || 0));
+    },
+    eventLabel(e) {
+      return `${e.category} / ${e.action}`;
     },
 
     // ---------- backup / json ----------
