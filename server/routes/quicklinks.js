@@ -7,6 +7,14 @@ const router = express.Router();
 // QuickLinks are inherently personal — no anonymous access, unlike dashboards.js.
 router.use(requireAuth);
 
+// Admin kill switch (Admin > Branding > Features). Checked server-side, not just
+// hidden in the UI, so the API is actually off when disabled, not just unlisted.
+router.use((req, res, next) => {
+  const row = db.prepare('SELECT quicklinks_enabled FROM branding WHERE id = 1').get();
+  if (row && !row.quicklinks_enabled) return res.status(403).json({ error: 'feature_disabled' });
+  next();
+});
+
 function sharedUsernames(quickLinkId) {
   return db.prepare(`
     SELECT u.username FROM quick_link_shares s JOIN users u ON u.id = s.shared_with_user_id

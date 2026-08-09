@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
-<link rel="stylesheet" href="/css/style.css?v=4">
+<link rel="stylesheet" href="/css/style.css?v=7">
 </head>
 <body x-data="adminApp()" x-init="init()">
 
@@ -41,6 +41,8 @@
       <button :class="{active: tab==='feedback'}" @click="tab='feedback'; loadFeedback()"><i class="bi bi-chat-square-text"></i> Feedback</button>
       <button :class="{active: tab==='analytics'}" @click="tab='analytics'; loadAnalytics()"><i class="bi bi-bar-chart"></i> Analytics</button>
       <button :class="{active: tab==='quicklinks'}" @click="tab='quicklinks'; loadQuickLinksAdmin(); loadQlPublishRequests()"><i class="bi bi-link-45deg"></i> Quick Links</button>
+      <button :class="{active: tab==='runbooks'}" @click="tab='runbooks'; loadRunbooksAdmin(); loadRbPublishRequests(); loadAutomators()"><i class="bi bi-terminal"></i> RunBooks</button>
+      <button :class="{active: tab==='envvars'}" @click="tab='envvars'; loadEnvVars()"><i class="bi bi-braces"></i> Environment Vars</button>
       <button :class="{active: tab==='backup'}" @click="tab='backup'"><i class="bi bi-cloud-arrow-down"></i> Backup / JSON</button>
       <button :class="{active: tab==='branding'}" @click="tab='branding'"><i class="bi bi-palette"></i> Branding</button>
       <button :class="{active: tab==='update'}" @click="tab='update'"><i class="bi bi-arrow-repeat"></i> Update</button>
@@ -690,6 +692,145 @@
       </div>
     </template>
 
+    <!-- ===================== RUNBOOKS ===================== -->
+    <template x-if="tab==='runbooks'">
+      <div>
+        <div class="panel-header"><h2>RunBooks</h2></div>
+        <div class="status-note">
+          <i class="bi bi-info-circle"></i>
+          <div>
+            RunBooks are users' own saved, parameterized curl requests. This view is for monitoring, reviewing
+            requests to make one generally available, and setting up scheduled automated runs (Automator).
+          </div>
+        </div>
+
+        <h3 style="font-size:0.95rem;margin:0 0 0.75rem;">Pending publish requests</h3>
+        <div class="admin-panel" style="margin-bottom:1.75rem;">
+          <table class="admin-table">
+            <thead><tr><th>RunBook</th><th>Requested by</th><th>Remarks</th><th>Requested</th><th></th></tr></thead>
+            <tbody>
+              <template x-for="r in rbPublishRequests" :key="r.id">
+                <tr>
+                  <td>
+                    <div x-text="r.runbook_name"></div>
+                    <div style="font-size:0.72rem;color:var(--ink-soft);" x-text="r.runbook_method + ' ' + r.runbook_url"></div>
+                  </td>
+                  <td x-text="r.requested_by"></td>
+                  <td style="white-space:pre-wrap;max-width:280px;" x-text="r.remarks || '—'"></td>
+                  <td style="font-family:var(--font-mono);font-size:0.75rem;" x-text="r.created_at"></td>
+                  <td style="display:flex;gap:0.3rem;">
+                    <button class="btn-sm primary" @click="openRbApproveModal(r)"><i class="bi bi-check-lg"></i> Approve</button>
+                    <button class="btn-sm danger" @click="rejectRbRequest(r)"><i class="bi bi-x-lg"></i> Reject</button>
+                  </td>
+                </tr>
+              </template>
+              <template x-if="!rbPublishRequests.length">
+                <tr><td colspan="5" style="color:var(--ink-soft);">No pending requests.</td></tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="panel-header" style="margin-bottom:0.75rem;">
+          <h3 style="font-size:0.95rem;margin:0;">Automator — scheduled runs</h3>
+          <button class="btn-sm primary" @click="openAutomatorModal()"><i class="bi bi-plus-lg"></i> New schedule</button>
+        </div>
+        <div class="admin-panel" style="margin-bottom:1.75rem;">
+          <table class="admin-table">
+            <thead><tr><th>RunBook</th><th>Owner</th><th>Every</th><th>Last run</th><th>Enabled</th><th></th></tr></thead>
+            <tbody>
+              <template x-for="a in automators" :key="a.id">
+                <tr>
+                  <td x-text="a.runbook_name"></td>
+                  <td x-text="a.owner_username"></td>
+                  <td x-text="a.interval_minutes + ' min'"></td>
+                  <td style="font-family:var(--font-mono);font-size:0.75rem;" x-text="a.last_run_at || 'never'"></td>
+                  <td><button class="btn-sm" :class="{primary: a.enabled}" @click="toggleAutomator(a)" x-text="a.enabled ? 'On' : 'Off'"></button></td>
+                  <td><button class="btn-sm danger" @click="deleteAutomator(a)"><i class="bi bi-trash"></i></button></td>
+                </tr>
+              </template>
+              <template x-if="!automators.length">
+                <tr><td colspan="6" style="color:var(--ink-soft);">No scheduled RunBooks yet.</td></tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="panel-header" style="margin-bottom:0.75rem;">
+          <h3 style="font-size:0.95rem;margin:0;">All RunBooks</h3>
+          <button class="btn-sm" @click="openDeletedRunbooksModal()"><i class="bi bi-trash3"></i> Deleted RunBooks</button>
+        </div>
+        <div class="admin-panel">
+          <table class="admin-table">
+            <thead><tr><th>Name</th><th>Owner</th><th>Shared with</th><th>Status</th><th>Runs</th><th>Last run</th><th></th></tr></thead>
+            <tbody>
+              <template x-for="rb in runbooksAdmin" :key="rb.id">
+                <tr>
+                  <td>
+                    <div x-text="rb.name"></div>
+                    <div style="font-size:0.72rem;color:var(--ink-soft);" x-text="rb.method + ' ' + rb.url"></div>
+                  </td>
+                  <td x-text="rb.owner_username"></td>
+                  <td x-text="rb.shared_with.length ? rb.shared_with.join(', ') : '—'"></td>
+                  <td><span class="pill" :class="{up: rb.status==='published', down: rb.status==='pending_publish'}" x-text="rb.status"></span></td>
+                  <td x-text="rb.run_count"></td>
+                  <td style="font-family:var(--font-mono);font-size:0.75rem;" x-text="rb.last_run_at || '—'"></td>
+                  <td style="display:flex;gap:0.3rem;">
+                    <button class="btn-sm" @click="openRbForcePublishModal(rb)" title="Force publish (admin override, no request needed)"><i class="bi bi-broadcast"></i></button>
+                    <button class="btn-sm danger" @click="deleteRunbookAdmin(rb)" title="Delete"><i class="bi bi-trash"></i></button>
+                  </td>
+                </tr>
+              </template>
+              <template x-if="!runbooksAdmin.length">
+                <tr><td colspan="7" style="color:var(--ink-soft);">No RunBooks yet.</td></tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </template>
+
+    <!-- ===================== ENVIRONMENT VARIABLES ===================== -->
+    <template x-if="tab==='envvars'">
+      <div>
+        <div class="panel-header">
+          <h2>Environment Variables</h2>
+          <button class="btn-sm primary" @click="openEnvVarModal()"><i class="bi bi-plus-lg"></i> New variable</button>
+        </div>
+        <div class="status-note">
+          <i class="bi bi-info-circle"></i>
+          <div>
+            Referenced in RunBooks as <code>{{env:NAME}}</code> — substituted server-side only, never sent to the
+            browser except here in the admin console. Values are masked below; click to reveal.
+          </div>
+        </div>
+        <div class="admin-panel">
+          <table class="admin-table">
+            <thead><tr><th>Name</th><th>Value</th><th>Description</th><th></th></tr></thead>
+            <tbody>
+              <template x-for="v in envVars" :key="v.id">
+                <tr>
+                  <td style="font-family:var(--font-mono);" x-text="v.name"></td>
+                  <td style="font-family:var(--font-mono);cursor:pointer;" @click="toggleRevealEnvVar(v.id)" :title="revealedEnvVarIds.includes(v.id) ? 'Click to hide' : 'Click to reveal'">
+                    <span x-show="revealedEnvVarIds.includes(v.id)" x-text="v.value"></span>
+                    <span x-show="!revealedEnvVarIds.includes(v.id)">••••••••</span>
+                  </td>
+                  <td x-text="v.description || '—'"></td>
+                  <td style="display:flex;gap:0.3rem;">
+                    <button class="btn-sm" @click="openEnvVarModal(v)"><i class="bi bi-pencil"></i></button>
+                    <button class="btn-sm danger" @click="deleteEnvVar(v)"><i class="bi bi-trash"></i></button>
+                  </td>
+                </tr>
+              </template>
+              <template x-if="!envVars.length">
+                <tr><td colspan="4" style="color:var(--ink-soft);">No environment variables yet.</td></tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </template>
+
     <!-- ===================== BACKUP / JSON ===================== -->
     <template x-if="tab==='backup'">
       <div>
@@ -770,6 +911,22 @@
               <input type="color" :value="branding.accent_color || '#7c3aed'" @input="branding.accent_color = $event.target.value">
               <button class="btn-sm" x-show="branding.accent_color" @click="branding.accent_color = null">Use theme default</button>
             </div>
+          </div>
+
+          <div class="field">
+            <label>Features</label>
+            <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;cursor:pointer;margin-bottom:0.4rem;">
+              <input type="checkbox" x-model="branding.quicklinks_enabled">
+              QuickLinks (personal bookmark sidebar) — visible and usable when on
+            </label>
+            <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;cursor:pointer;margin-bottom:0.4rem;">
+              <input type="checkbox" x-model="branding.runbooks_enabled">
+              RunBooks (saved curl requests + Automator) — off also pauses scheduled Automator runs
+            </label>
+            <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;cursor:pointer;">
+              <input type="checkbox" x-model="branding.remember_last_tab_enabled">
+              Remember each user's last dashboard tab (stored in their browser) — off always opens the first tab
+            </label>
           </div>
 
           <button class="btn-sm primary" @click="saveBranding()"><i class="bi bi-check-lg"></i> Save branding</button>
@@ -1127,6 +1284,118 @@
       <div class="modal-actions">
         <button type="button" class="btn-sm" @click="qlApproveModalOpen = false">Cancel</button>
         <button class="btn-sm primary" :disabled="!qlApproveCategoryId" @click="approveQlRequest()">Approve &amp; publish</button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<!-- ===================== RUNBOOK APPROVE MODAL ===================== -->
+<template x-if="rbApproveModalOpen">
+  <div class="modal-backdrop" @click.self="rbApproveModalOpen = false">
+    <div class="modal" style="max-width:420px;" role="dialog" aria-modal="true" aria-label="Approve RunBook">
+      <h3 x-text="rbApproveMode === 'force' ? 'Force publish this RunBook' : 'Make this generally available'"></h3>
+      <template x-if="rbApproveMode === 'force'">
+        <p class="help-text" style="margin-bottom:0.75rem;">Publishes immediately — no request needed, and this resolves any pending request for it too.</p>
+      </template>
+      <div class="field">
+        <label>Visibility</label>
+        <select x-model="rbApproveVisibility">
+          <option value="public">Public (anyone, no login)</option>
+          <option value="authenticated">Any signed-in user</option>
+          <option value="roles">Specific roles</option>
+        </select>
+      </div>
+      <template x-if="rbApproveVisibility === 'roles'">
+        <div class="field">
+          <label>Roles</label>
+          <div style="display:flex;flex-direction:column;gap:0.3rem;max-height:160px;overflow-y:auto;">
+            <template x-for="r in roles" :key="r.id">
+              <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;cursor:pointer;">
+                <input type="checkbox" :checked="rbApproveRoleIds.includes(r.id)" @change="toggleRbApproveRole(r.id)">
+                <span x-text="r.name"></span>
+              </label>
+            </template>
+          </div>
+        </div>
+      </template>
+      <div class="modal-actions">
+        <button type="button" class="btn-sm" @click="rbApproveModalOpen = false">Cancel</button>
+        <button class="btn-sm primary" @click="approveRbRequest()" x-text="rbApproveMode === 'force' ? 'Force publish' : 'Approve & publish'"></button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<!-- ===================== DELETED RUNBOOKS MODAL ===================== -->
+<template x-if="deletedRunbooksModalOpen">
+  <div class="modal-backdrop" @click.self="deletedRunbooksModalOpen = false">
+    <div class="modal" style="max-width:520px;" role="dialog" aria-modal="true" aria-label="Deleted RunBooks">
+      <h3>Deleted RunBooks</h3>
+      <p class="help-text" style="margin-bottom:0.75rem;">Soft-deleted only — restoring brings back sharing and visibility exactly as it was.</p>
+      <template x-if="deletedRunbooks.length">
+        <table class="admin-table">
+          <thead><tr><th>Name</th><th>Owner</th><th>Was</th><th>Deleted</th><th></th></tr></thead>
+          <tbody>
+            <template x-for="rb in deletedRunbooks" :key="rb.id">
+              <tr>
+                <td x-text="rb.name"></td>
+                <td x-text="rb.owner_username"></td>
+                <td><span class="pill" x-text="rb.status"></span></td>
+                <td style="font-family:var(--font-mono);font-size:0.75rem;" x-text="rb.deleted_at"></td>
+                <td><button class="btn-sm primary" @click="restoreRunbook(rb)"><i class="bi bi-arrow-counterclockwise"></i> Restore</button></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </template>
+      <template x-if="!deletedRunbooks.length">
+        <div class="empty-state" style="padding:1rem 0;">Nothing deleted.</div>
+      </template>
+      <div class="modal-actions">
+        <button class="btn-sm" @click="deletedRunbooksModalOpen = false">Close</button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<!-- ===================== ENVIRONMENT VARIABLE MODAL ===================== -->
+<template x-if="envVarModalOpen">
+  <div class="modal-backdrop" @click.self="envVarModalOpen = false">
+    <div class="modal" style="max-width:420px;" role="dialog" aria-modal="true" :aria-label="envVarEditingId ? 'Edit variable' : 'New variable'">
+      <h3 x-text="envVarEditingId ? 'Edit variable' : 'New variable'"></h3>
+      <div class="field"><label>Name</label><input type="text" x-model="envVarForm.name" placeholder="API_TOKEN" :disabled="!!envVarEditingId"></div>
+      <div class="field"><label>Value</label><input type="text" x-model="envVarForm.value"></div>
+      <div class="field"><label>Description (optional)</label><input type="text" x-model="envVarForm.description"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn-sm" @click="envVarModalOpen = false">Cancel</button>
+        <button class="btn-sm primary" @click="saveEnvVar()">Save</button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<!-- ===================== AUTOMATOR MODAL ===================== -->
+<template x-if="automatorModalOpen">
+  <div class="modal-backdrop" @click.self="automatorModalOpen = false">
+    <div class="modal" style="max-width:420px;" role="dialog" aria-modal="true" aria-label="New Automator">
+      <h3>New scheduled run</h3>
+      <div class="field">
+        <label>RunBook</label>
+        <select x-model.number="automatorForm.runbook_id">
+          <option :value="null" disabled>Choose a RunBook…</option>
+          <template x-for="rb in automatorEligibleRunbooks()" :key="rb.id"><option :value="rb.id" x-text="rb.name + ' (' + rb.owner_username + ')'"></option></template>
+        </select>
+        <template x-if="!automatorEligibleRunbooks().length">
+          <p style="font-size:0.78rem;color:var(--ink-soft);margin-top:0.3rem;">
+            No eligible RunBooks — one that prompts for variables at run time can't be automated (nobody's there to
+            answer), and each RunBook can only have one schedule.
+          </p>
+        </template>
+      </div>
+      <div class="field"><label>Every (minutes)</label><input type="number" min="1" x-model.number="automatorForm.interval_minutes"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn-sm" @click="automatorModalOpen = false">Cancel</button>
+        <button class="btn-sm primary" @click="createAutomator()">Create</button>
       </div>
     </div>
   </div>

@@ -8,6 +8,7 @@ require('./db'); // ensures schema + bootstrap admin/dashboard run before anythi
 const { resolveUser } = require('./middleware/auth');
 const { startStatusChecker } = require('./services/statusChecker');
 const { startFeedbackAutoCloser } = require('./services/feedbackAutoCloser');
+const { startAutomatorRunner } = require('./services/automatorRunner');
 
 const authRoutes = require('./routes/auth');
 const dashboardRoutes = require('./routes/dashboards');
@@ -16,6 +17,7 @@ const statusRoutes = require('./routes/status');
 const settingsRoutes = require('./routes/settings');
 const analyticsRoutes = require('./routes/analytics');
 const quicklinksRoutes = require('./routes/quicklinks');
+const runbooksRoutes = require('./routes/runbooks');
 
 const app = express();
 
@@ -38,6 +40,7 @@ app.use('/api/status', statusRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/admin/analytics', analyticsRoutes);
 app.use('/api/quicklinks', quicklinksRoutes);
+app.use('/api/runbooks', runbooksRoutes);
 
 // Off by default (normal browser caching applies). Set DISABLE_STATIC_CACHE=true
 // in .env to force no-cache on .css/.js while iterating on the frontend, so
@@ -60,4 +63,5 @@ app.listen(PORT, () => {
   console.log(`[ops-dashboard] listening on :${PORT}`);
   startStatusChecker();
   startFeedbackAutoCloser();
+  startAutomatorRunner();
 });

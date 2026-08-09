@@ -4,6 +4,7 @@ const path = require('path');
 const { exec } = require('child_process');
 const db = require('../db');
 const { requireAdmin } = require('../middleware/auth');
+const { requiredUserVarNames } = require('../services/runbookExecutor');
 
 const router = express.Router();
 router.use(requireAdmin);
@@ -522,15 +523,211 @@ router.post('/quicklinks/publish-requests/:id/reject', (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- Environment Variables (for RunBooks {{env:NAME}}) ----------
+router.get('/environment-variables', (req, res) => {
+  res.json({ variables: db.prepare('SELECT * FROM environment_variables ORDER BY name').all() });
+});
+
+router.post('/environment-variables', (req, res) => {
+  const { name, value, description = '' } = req.body || {};
+  if (!name || !name.trim() || value === undefined || value === '') return res.status(400).json({ error: 'name_and_value_required' });
+  try {
+    const info = db.prepare('INSERT INTO environment_variables (name, value, description) VALUES (?, ?, ?)')
+      .run(name.trim(), value, description.trim());
+    res.json({ id: info.lastInsertRowid });
+  } catch (e) {
+    res.status(400).json({ error: 'name_taken', detail: e.message });
+  }
+});
+
+router.put('/environment-variables/:id', (req, res) => {
+  const { name, value, description } = req.body || {};
+  db.prepare('UPDATE environment_variables SET name = COALESCE(?, name), value = COALESCE(?, value), description = COALESCE(?, description) WHERE id = ?')
+    .run(name, value, description, req.params.id);
+  res.json({ ok: true });
+});
+
+router.delete('/environment-variables/:id', (req, res) => {
+  db.prepare('DELETE FROM environment_variables WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+// ---------- RunBooks (monitoring + publish requests) ----------
+router.get('/runbooks', (req, res) => {
+  const rows = db.prepare(`
+    SELECT rb.id, rb.name, rb.description, rb.method, rb.url, rb.status, rb.visibility, rb.notify_email, rb.user_variable_names, rb.created_at, u.username AS owner_username
+    FROM runbooks rb JOIN users u ON u.id = rb.owner_user_id
+    WHERE rb.deleted_at IS NULL
+    ORDER BY rb.created_at DESC
+  `).all();
+  const ids = rows.map(r => r.id);
+  const shareMap = {};
+  const runStatsMap = {};
+  if (ids.length) {
+    const placeholders = ids.map(() => '?').join(',');
+    const shareRows = db.prepare(`
+      SELECT s.runbook_id, u.username FROM runbook_shares s JOIN users u ON u.id = s.shared_with_user_id
+      WHERE s.runbook_id IN (${placeholders})
+    `).all(...ids);
+    for (const r of shareRows) (shareMap[r.runbook_id] = shareMap[r.runbook_id] || []).push(r.username);
+    const runRows = db.prepare(`
+      SELECT runbook_id, COUNT(*) AS run_count, MAX(created_at) AS last_run_at
+      FROM runbook_runs WHERE runbook_id IN (${placeholders}) GROUP BY runbook_id
+    `).all(...ids);
+    for (const r of runRows) runStatsMap[r.runbook_id] = r;
+  }
+  const runbooks = rows.map(r => ({
+    ...r,
+    shared_with: shareMap[r.id] || [],
+    run_count: runStatsMap[r.id] ? runStatsMap[r.id].run_count : 0,
+    last_run_at: runStatsMap[r.id] ? runStatsMap[r.id].last_run_at : null,
+  }));
+  res.json({ runbooks });
+});
+
+// Admin can delete a RunBook at any status (including published — the one case a
+// regular user is blocked from). Always soft — see runbooks table comment in db.js.
+router.delete('/runbooks/:id', (req, res) => {
+  db.prepare("UPDATE runbooks SET deleted_at = datetime('now') WHERE id = ?").run(req.params.id);
+  res.json({ ok: true });
+});
+
+// Deleted RunBooks — listed separately so they can be restored, same pattern as
+// GET /users/deleted. Shares/roles were left untouched on delete, so restoring just
+// clears deleted_at and everything comes back as-is.
+router.get('/runbooks/deleted', (req, res) => {
+  const rows = db.prepare(`
+    SELECT rb.id, rb.name, rb.url, rb.status, rb.deleted_at, u.username AS owner_username
+    FROM runbooks rb JOIN users u ON u.id = rb.owner_user_id
+    WHERE rb.deleted_at IS NOT NULL
+    ORDER BY rb.deleted_at DESC
+  `).all();
+  res.json({ runbooks: rows });
+});
+
+router.post('/runbooks/:id/restore', (req, res) => {
+  db.prepare('UPDATE runbooks SET deleted_at = NULL WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+// POST /admin/runbooks/:id/force-publish { visibility, role_ids } -> publish directly,
+// bypassing the request/approve flow. Any pending request for it is auto-resolved so
+// it doesn't sit "pending" forever once the RunBook has already moved on.
+router.post('/runbooks/:id/force-publish', (req, res) => {
+  const runbook = db.prepare('SELECT * FROM runbooks WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
+  if (!runbook) return res.status(404).json({ error: 'not_found' });
+  const { visibility = 'authenticated', role_ids = [] } = req.body || {};
+  if (!['public', 'authenticated', 'roles'].includes(visibility)) return res.status(400).json({ error: 'invalid_visibility' });
+  db.transaction(() => {
+    db.prepare("UPDATE runbooks SET status = 'published', visibility = ? WHERE id = ?").run(visibility, runbook.id);
+    if (visibility === 'roles') setRoleLinks('runbook_roles', 'runbook_id', runbook.id, role_ids);
+    db.prepare(`
+      UPDATE runbook_publish_requests SET status = 'approved', admin_remarks = 'Force-published by admin', resolved_by_user_id = ?, resolved_at = datetime('now')
+      WHERE runbook_id = ? AND status = 'pending'
+    `).run(req.user.id, runbook.id);
+  })();
+  res.json({ ok: true });
+});
+
+router.get('/runbooks/publish-requests', (req, res) => {
+  const status = req.query.status || 'pending';
+  const where = status === 'all' ? '' : 'WHERE r.status = ?';
+  const rows = db.prepare(`
+    SELECT r.id, r.remarks, r.status, r.admin_remarks, r.created_at, r.resolved_at,
+           rb.id AS runbook_id, rb.name AS runbook_name, rb.url AS runbook_url, rb.method AS runbook_method,
+           u.username AS requested_by
+    FROM runbook_publish_requests r
+    JOIN runbooks rb ON rb.id = r.runbook_id
+    JOIN users u ON u.id = r.requested_by_user_id
+    ${where}
+    ORDER BY r.created_at DESC
+  `).all(...(status === 'all' ? [] : [status]));
+  res.json({ requests: rows });
+});
+
+// POST approve { visibility, role_ids } -> flips the RunBook itself to published/that
+// visibility in place (unlike a QuickLink, nothing new is created — it's still the
+// same executable RunBook, just visible to more people now).
+router.post('/runbooks/publish-requests/:id/approve', (req, res) => {
+  const request = db.prepare('SELECT * FROM runbook_publish_requests WHERE id = ?').get(req.params.id);
+  if (!request || request.status !== 'pending') return res.status(404).json({ error: 'not_found_or_resolved' });
+  const runbookExists = db.prepare('SELECT 1 FROM runbooks WHERE id = ? AND deleted_at IS NULL').get(request.runbook_id);
+  if (!runbookExists) return res.status(404).json({ error: 'runbook_deleted' });
+  const { visibility = 'authenticated', role_ids = [] } = req.body || {};
+  if (!['public', 'authenticated', 'roles'].includes(visibility)) return res.status(400).json({ error: 'invalid_visibility' });
+  db.transaction(() => {
+    db.prepare("UPDATE runbooks SET status = 'published', visibility = ? WHERE id = ?").run(visibility, request.runbook_id);
+    if (visibility === 'roles') setRoleLinks('runbook_roles', 'runbook_id', request.runbook_id, role_ids);
+    db.prepare(`
+      UPDATE runbook_publish_requests SET status = 'approved', resolved_by_user_id = ?, resolved_at = datetime('now') WHERE id = ?
+    `).run(req.user.id, request.id);
+  })();
+  res.json({ ok: true });
+});
+
+router.post('/runbooks/publish-requests/:id/reject', (req, res) => {
+  const request = db.prepare('SELECT * FROM runbook_publish_requests WHERE id = ?').get(req.params.id);
+  if (!request || request.status !== 'pending') return res.status(404).json({ error: 'not_found_or_resolved' });
+  const { admin_remarks = '' } = req.body || {};
+  db.transaction(() => {
+    db.prepare(`
+      UPDATE runbook_publish_requests SET status = 'rejected', admin_remarks = ?, resolved_by_user_id = ?, resolved_at = datetime('now') WHERE id = ?
+    `).run(admin_remarks.trim(), req.user.id, request.id);
+    db.prepare("UPDATE runbooks SET status = 'private' WHERE id = ?").run(request.runbook_id);
+  })();
+  res.json({ ok: true });
+});
+
+// ---------- Automators (admin-only scheduling) ----------
+router.get('/automators', (req, res) => {
+  const rows = db.prepare(`
+    SELECT a.*, rb.name AS runbook_name, rb.owner_user_id, u.username AS owner_username
+    FROM automators a JOIN runbooks rb ON rb.id = a.runbook_id JOIN users u ON u.id = rb.owner_user_id
+    WHERE rb.deleted_at IS NULL
+    ORDER BY a.created_at DESC
+  `).all();
+  res.json({ automators: rows });
+});
+
+router.post('/automators', (req, res) => {
+  const { runbook_id, interval_minutes } = req.body || {};
+  const runbook = runbook_id ? db.prepare('SELECT * FROM runbooks WHERE id = ? AND deleted_at IS NULL').get(runbook_id) : null;
+  if (!runbook) return res.status(400).json({ error: 'invalid_runbook' });
+  if (requiredUserVarNames(runbook).length) return res.status(400).json({ error: 'runbook_requires_user_input_cannot_automate' });
+  const minutes = Number(interval_minutes);
+  if (!Number.isFinite(minutes) || minutes < 1) return res.status(400).json({ error: 'invalid_interval' });
+  try {
+    const info = db.prepare('INSERT INTO automators (runbook_id, interval_minutes, created_by_user_id) VALUES (?, ?, ?)')
+      .run(runbook.id, Math.round(minutes), req.user.id);
+    res.json({ id: info.lastInsertRowid });
+  } catch (e) {
+    res.status(400).json({ error: 'automator_already_exists_for_runbook', detail: e.message });
+  }
+});
+
+router.put('/automators/:id', (req, res) => {
+  const { interval_minutes, enabled } = req.body || {};
+  db.prepare('UPDATE automators SET interval_minutes = COALESCE(?, interval_minutes), enabled = COALESCE(?, enabled) WHERE id = ?')
+    .run(interval_minutes ? Math.round(interval_minutes) : undefined, enabled !== undefined ? (enabled ? 1 : 0) : undefined, req.params.id);
+  res.json({ ok: true });
+});
+
+router.delete('/automators/:id', (req, res) => {
+  db.prepare('DELETE FROM automators WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
 // ---------- branding ----------
 // Partial update — only touches fields present in the body, same style as PUT
 // /users/:id above. Any field may be explicitly null to clear it back to unset.
+const BOOLEAN_SETTINGS_FIELDS = ['quicklinks_enabled', 'runbooks_enabled', 'remember_last_tab_enabled'];
 router.put('/settings', (req, res) => {
-  const fields = ['app_title', 'logo_data', 'background_data', 'watermark_data', 'watermark_opacity', 'accent_color'];
+  const fields = ['app_title', 'logo_data', 'background_data', 'watermark_data', 'watermark_opacity', 'accent_color', ...BOOLEAN_SETTINGS_FIELDS];
   const updates = fields.filter(f => req.body && Object.prototype.hasOwnProperty.call(req.body, f));
   if (updates.length) {
     const setClause = updates.map(f => `${f} = ?`).join(', ');
-    db.prepare(`UPDATE branding SET ${setClause} WHERE id = 1`).run(...updates.map(f => req.body[f]));
+    const values = updates.map(f => BOOLEAN_SETTINGS_FIELDS.includes(f) ? (req.body[f] ? 1 : 0) : req.body[f]);
+    db.prepare(`UPDATE branding SET ${setClause} WHERE id = 1`).run(...values);
   }
   res.json({ ok: true });
 });

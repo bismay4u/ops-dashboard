@@ -20,6 +20,9 @@ function dashboardApp() {
     logoUrl: null,
     watermarkUrl: null,
     watermarkOpacity: 0.08,
+    quicklinksEnabled: true,
+    runbooksEnabled: true,
+    rememberLastTabEnabled: true,
     async loadBranding() {
       try {
         const b = await fetch('/api/settings').then(r => r.json());
@@ -42,6 +45,9 @@ function dashboardApp() {
       this.logoUrl = b.logo_data || null;
       this.watermarkUrl = b.watermark_data || null;
       this.watermarkOpacity = b.watermark_opacity ?? 0.08;
+      this.quicklinksEnabled = b.quicklinks_enabled === undefined ? true : !!b.quicklinks_enabled;
+      this.runbooksEnabled = b.runbooks_enabled === undefined ? true : !!b.runbooks_enabled;
+      this.rememberLastTabEnabled = b.remember_last_tab_enabled === undefined ? true : !!b.remember_last_tab_enabled;
     },
 
     // auth — user can legitimately be null; anonymous visitors see public content.
@@ -144,7 +150,7 @@ function dashboardApp() {
       return this.quickLinks.own.filter(l => l.status !== 'published');
     },
     async loadQuickLinks() {
-      if (!this.user) { this.quickLinks = { own: [], shared: [] }; return; }
+      if (!this.user || !this.quicklinksEnabled) { this.quickLinks = { own: [], shared: [] }; return; }
       try {
         const res = await fetch('/api/quicklinks', { credentials: 'include' });
         if (res.ok) this.quickLinks = await res.json();
@@ -229,6 +235,224 @@ function dashboardApp() {
       this.pushToast('Publish request sent to admins', 'success');
     },
 
+    // RunBooks — saved, parameterized HTTP requests (own / shared / published-visible)
+    runbooks: { own: [], shared: [], public: [] },
+    rbCurlInput: '',
+    rbShowCurlBox: false,
+    rbModalOpen: false,
+    rbForm: { name: '', description: '', method: 'GET', url: '', headers: '', body: '', user_variable_names: '', success_keyword: '', failure_keyword: '', notify_email: '' },
+    rbEditingId: null,
+    rbError: null,
+    rbSaving: false,
+    rbRunModalOpen: false,
+    rbRunTarget: null,
+    rbRunVars: {},
+    rbRunning: false,
+    rbRunResult: null,
+    rbShareModalOpen: false,
+    rbShareLinkId: null,
+    rbShareUserIds: [],
+    rbAllUsers: [],
+    rbPublishModalOpen: false,
+    rbPublishId: null,
+    rbPublishRemarks: '',
+    rbLogModalOpen: false,
+    rbLogTarget: null,
+    rbLogRuns: [],
+    rbLogLoading: false,
+
+    async loadRunbooks() {
+      if (!this.user || !this.runbooksEnabled) { this.runbooks = { own: [], shared: [], public: [] }; return; }
+      try {
+        const res = await fetch('/api/runbooks', { credentials: 'include' });
+        if (res.ok) this.runbooks = await res.json();
+      } catch (e) { /* supplementary panel — a failed fetch just leaves it empty */ }
+    },
+    rbRequiredVars(rb) {
+      return (rb.user_variable_names || '').split(',').map(s => s.trim()).filter(Boolean);
+    },
+    openRbModal(rb = null, fromCurl = false) {
+      this.rbForm = rb
+        ? { name: rb.name, description: rb.description || '', method: rb.method || 'GET', url: rb.url, headers: rb.headers || '', body: rb.body || '', user_variable_names: rb.user_variable_names || '', success_keyword: rb.success_keyword || '', failure_keyword: rb.failure_keyword || '', notify_email: rb.notify_email || '' }
+        : { name: '', description: '', method: 'GET', url: '', headers: '', body: '', user_variable_names: '', success_keyword: '', failure_keyword: '', notify_email: '' };
+      this.rbEditingId = rb ? rb.id : null;
+      this.rbCurlInput = '';
+      this.rbShowCurlBox = fromCurl;
+      this.rbError = null;
+      this.rbModalOpen = true;
+      if (fromCurl) this.$nextTick(() => this.$refs.rbCurlTextarea && this.$refs.rbCurlTextarea.focus());
+    },
+    // Tokenizes a curl command respecting quotes, then reads the flags this app's
+    // RunBook model actually has fields for (-X/-H/-d and their long forms).
+    // Everything else (-k, -b, --compressed, --form, ...) is silently ignored rather
+    // than rejected — the point is a fast starting point the user reviews and edits.
+    parseCurlCommand(input) {
+      const str = input.replace(/\\\r?\n/g, ' ').trim();
+      if (!str) return null;
+      const tokens = [];
+      let i = 0;
+      while (i < str.length) {
+        while (i < str.length && /\s/.test(str[i])) i++;
+        if (i >= str.length) break;
+        let quote = null;
+        if (str[i] === '"' || str[i] === "'") { quote = str[i]; i++; }
+        let tok = '';
+        while (i < str.length) {
+          if (quote) {
+            if (str[i] === quote) { i++; break; }
+            if (str[i] === '\\' && quote === '"' && (str[i + 1] === '"' || str[i + 1] === '\\')) { tok += str[i + 1]; i += 2; continue; }
+            tok += str[i]; i++;
+          } else {
+            if (/\s/.test(str[i])) break;
+            tok += str[i]; i++;
+          }
+        }
+        tokens.push(tok);
+      }
+
+      let method = null, url = null, body = null;
+      const headers = [];
+      for (let idx = 0; idx < tokens.length; idx++) {
+        const t = tokens[idx];
+        if (t === 'curl') continue;
+        if (t === '-X' || t === '--request') { method = tokens[++idx]; continue; }
+        if (t === '-H' || t === '--header') { headers.push(tokens[++idx]); continue; }
+        if (t === '-d' || t === '--data' || t === '--data-raw' || t === '--data-binary' || t === '--data-urlencode') {
+          body = tokens[++idx];
+          if (!method) method = 'POST';
+          continue;
+        }
+        if (t.startsWith('-')) continue; // unmodeled flag (-k, -b, --compressed, --form...) — skipped, not an error
+        if (!url) url = t;
+      }
+      if (!url) return null;
+      return { method: (method || 'GET').toUpperCase(), url, headers: headers.join('\n'), body: body || '' };
+    },
+    applyCurlParse() {
+      const parsed = this.parseCurlCommand(this.rbCurlInput);
+      if (!parsed) {
+        this.rbError = 'Could not find a URL in that curl command.';
+        return;
+      }
+      this.rbForm.method = parsed.method;
+      this.rbForm.url = parsed.url;
+      if (parsed.headers) this.rbForm.headers = parsed.headers;
+      if (parsed.body) this.rbForm.body = parsed.body;
+      this.rbError = null;
+      this.pushToast('Parsed — review the fields below and save.', 'success');
+    },
+    async saveRunbook() {
+      if (!this.rbForm.name.trim() || !this.rbForm.url.trim()) {
+        this.rbError = 'Name and URL are required.';
+        return;
+      }
+      this.rbSaving = true;
+      this.rbError = null;
+      try {
+        const path = this.rbEditingId ? `/api/runbooks/${this.rbEditingId}` : '/api/runbooks';
+        const method = this.rbEditingId ? 'PUT' : 'POST';
+        const res = await fetch(path, { method, headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(this.rbForm) });
+        if (!res.ok) throw new Error();
+        this.rbModalOpen = false;
+        await this.loadRunbooks();
+        this.pushToast(this.rbEditingId ? 'RunBook updated' : 'RunBook created', 'success');
+      } catch (e) {
+        this.rbError = 'Could not save — try again.';
+      } finally {
+        this.rbSaving = false;
+      }
+    },
+    async deleteRunbook(rb) {
+      if (!confirm(`Delete "${rb.name}"?`)) return;
+      const res = await fetch(`/api/runbooks/${rb.id}`, { method: 'DELETE', credentials: 'include' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        this.pushToast(data.error === 'published_delete_admin_only' ? 'Published RunBooks can only be deleted by an admin.' : 'Could not delete.', 'error');
+        await this.loadRunbooks(); // refresh — its status may have changed since this button rendered
+        return;
+      }
+      await this.loadRunbooks();
+      this.pushToast('RunBook deleted', 'success');
+    },
+    openRunModal(rb) {
+      this.rbRunTarget = rb;
+      this.rbRunVars = {};
+      for (const name of this.rbRequiredVars(rb)) this.rbRunVars[name] = '';
+      this.rbRunResult = null;
+      this.rbRunModalOpen = true;
+    },
+    async executeRun() {
+      this.rbRunning = true;
+      this.rbRunResult = null;
+      try {
+        const res = await fetch(`/api/runbooks/${this.rbRunTarget.id}/run`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+          body: JSON.stringify({ variables: this.rbRunVars }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          this.pushToast(data.error === 'missing_variables' ? `Missing: ${data.missing.join(', ')}` : 'Could not run.', 'error');
+          return;
+        }
+        this.rbRunResult = data.run;
+        await this.loadRunbooks(); // refresh the last-run badge
+      } catch (e) {
+        this.pushToast('Could not reach the server.', 'error');
+      } finally {
+        this.rbRunning = false;
+      }
+    },
+    async openRbShareModal(rb) {
+      this.rbShareLinkId = rb.id;
+      this.rbShareModalOpen = true;
+      const [usersData, sharesData] = await Promise.all([
+        fetch('/api/runbooks/_users', { credentials: 'include' }).then(r => r.json()),
+        fetch(`/api/runbooks/${rb.id}/shares`, { credentials: 'include' }).then(r => r.json()),
+      ]);
+      this.rbAllUsers = usersData.users;
+      this.rbShareUserIds = sharesData.user_ids;
+    },
+    toggleRbShareUser(userId) {
+      const idx = this.rbShareUserIds.indexOf(userId);
+      if (idx === -1) this.rbShareUserIds.push(userId);
+      else this.rbShareUserIds.splice(idx, 1);
+    },
+    async saveRbShares() {
+      await fetch(`/api/runbooks/${this.rbShareLinkId}/share`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+        body: JSON.stringify({ user_ids: this.rbShareUserIds }),
+      });
+      this.rbShareModalOpen = false;
+      await this.loadRunbooks();
+      this.pushToast('Sharing updated', 'success');
+    },
+    openRbPublishModal(rb) {
+      this.rbPublishId = rb.id;
+      this.rbPublishRemarks = '';
+      this.rbPublishModalOpen = true;
+    },
+    async submitRbPublishRequest() {
+      await fetch(`/api/runbooks/${this.rbPublishId}/publish-request`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+        body: JSON.stringify({ remarks: this.rbPublishRemarks }),
+      });
+      this.rbPublishModalOpen = false;
+      await this.loadRunbooks();
+      this.pushToast('Publish request sent to admins', 'success');
+    },
+    async openRunLog(rb) {
+      this.rbLogTarget = rb;
+      this.rbLogRuns = [];
+      this.rbLogLoading = true;
+      this.rbLogModalOpen = true;
+      try {
+        const res = await fetch(`/api/runbooks/${rb.id}/runs`, { credentials: 'include' });
+        if (res.ok) this.rbLogRuns = (await res.json()).runs;
+      } finally {
+        this.rbLogLoading = false;
+      }
+    },
+
     // dashboards
     dashboards: [],
     activeSlug: null,
@@ -274,6 +498,7 @@ function dashboardApp() {
       // so anonymous visitors see whatever's public and nothing more.
       await this.loadDashboardList();
       await this.loadQuickLinks();
+      await this.loadRunbooks();
     },
 
     registerServiceWorker() {
@@ -327,6 +552,7 @@ function dashboardApp() {
         this.pushToast(`Signed in as ${data.user.username}`, 'success');
         await this.loadDashboardList(); // reload — more may now be visible
         await this.loadQuickLinks();
+        await this.loadRunbooks();
       } catch (e) {
         this.loginError = 'Could not reach the server.';
       } finally {
@@ -347,6 +573,7 @@ function dashboardApp() {
       if (this.statusPollHandle) clearInterval(this.statusPollHandle);
       if (forgetDevice) this.pushToast('Signed out and forgot this device.', 'success');
       this.quickLinks = { own: [], shared: [] };
+      this.runbooks = { own: [], shared: [], public: [] };
       await this.loadDashboardList(); // reload — drop back to public-only view
     },
 
@@ -383,7 +610,12 @@ function dashboardApp() {
       const data = await res.json();
       this.dashboards = data.dashboards;
       if (this.dashboards.length) {
-        const keepSlug = this.dashboards.find(d => d.slug === this.activeSlug) ? this.activeSlug : this.dashboards[0].slug;
+        // On a fresh load activeSlug isn't set yet — fall back to the last tab this
+        // browser was on (if the admin allows it, and that dashboard is still visible),
+        // otherwise the first dashboard, same as before.
+        const rememberedSlug = this.rememberLastTabEnabled ? localStorage.getItem('ops-dash-last-tab') : null;
+        const wanted = this.activeSlug || rememberedSlug;
+        const keepSlug = this.dashboards.find(d => d.slug === wanted) ? wanted : this.dashboards[0].slug;
         await this.loadDashboard(keepSlug);
       } else {
         this.activeData = null;
@@ -393,6 +625,8 @@ function dashboardApp() {
     async loadDashboard(slug) {
       this.loadingDashboard = true;
       this.activeSlug = slug;
+      if (this.rememberLastTabEnabled) localStorage.setItem('ops-dash-last-tab', slug);
+      else localStorage.removeItem('ops-dash-last-tab');
       try {
         const res = await fetch(`/api/dashboards/${slug}`, { credentials: 'include' });
         if (res.ok) {

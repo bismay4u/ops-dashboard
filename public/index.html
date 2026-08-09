@@ -11,7 +11,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
-<link rel="stylesheet" href="/css/style.css?v=4">
+<link rel="stylesheet" href="/css/style.css?v=7">
 </head>
 <body x-data="dashboardApp()" x-init="init()" @keydown.window="onGlobalKeydown($event)">
 
@@ -84,8 +84,8 @@
         </div>
       </nav>
 
-      <div class="shell shell-with-sidebar">
-        <aside class="quicklinks-sidebar">
+      <div class="shell" :class="{'shell-with-sidebar': quicklinksEnabled}">
+        <aside class="quicklinks-sidebar" x-show="quicklinksEnabled">
           <h2>
             <span><i class="bi bi-link-45deg"></i> QuickLinks</span>
             <template x-if="user">
@@ -146,7 +146,7 @@
           </template>
         </aside>
 
-        <div class="shell-main">
+        <div :class="quicklinksEnabled ? 'shell-main' : 'shell-main-full'">
         <div class="page-header">
           <div class="page-header-title">
             <h1 class="hero-title" x-text="greeting"></h1>
@@ -295,6 +295,95 @@
               <div class="empty-state">
                 <i class="bi bi-grid" style="font-size:1.5rem;"></i>
                 <p style="margin-top:0.5rem;" x-text="user ? 'Nothing here yet. Add apps and bookmarks from the admin console.' : 'Nothing public here yet — sign in if you should have access.'"></p>
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <!-- ================= RUNBOOKS PANEL ================= -->
+        <template x-if="user && runbooksEnabled">
+          <div class="runbooks-panel">
+            <h2 class="section-heading" style="display:flex;align-items:center;justify-content:space-between;">
+              <span><i class="bi bi-terminal"></i> RunBooks</span>
+              <div style="display:flex;gap:0.4rem;">
+                <button class="btn-sm" @click="openRbModal(null, false)"><i class="bi bi-plus-lg"></i> New RunBook</button>
+                <button class="btn-sm" @click="openRbModal(null, true)"><i class="bi bi-terminal"></i> From Curl</button>
+              </div>
+            </h2>
+
+            <template x-if="!runbooks.own.length && !runbooks.shared.length && !runbooks.public.length">
+              <p style="font-size:0.82rem;color:var(--ink-soft);">No RunBooks yet — save a curl request you run often.</p>
+            </template>
+
+            <template x-if="runbooks.own.length">
+              <div style="margin-bottom:1.25rem;">
+                <div class="quicklink-group-label">My RunBooks</div>
+                <div class="card-grid">
+                  <template x-for="rb in runbooks.own" :key="rb.id">
+                    <div class="app-card runbook-card">
+                      <button type="button" class="app-card-hit" @click="openRunModal(rb)" :aria-label="'Run ' + rb.name"></button>
+                      <span class="icon"><i class="bi bi-terminal"></i></span>
+                      <span class="meta">
+                        <span class="name" x-text="rb.name"></span>
+                        <template x-if="rb.status === 'pending_publish'"><span class="pill" style="font-size:0.6rem;" title="Publish request pending admin review">pending</span></template>
+                        <template x-if="rb.status === 'published'"><span class="pill up" style="font-size:0.6rem;" title="Visible to others per its visibility setting">published</span></template>
+                        <template x-if="rb.description"><span class="description" x-text="rb.description"></span></template>
+                      </span>
+                      <span class="status-dot" :class="{up: rb.last_run && rb.last_run.result === 'success', down: rb.last_run && rb.last_run.result !== 'success'}" :title="rb.last_run ? ('Last run: ' + rb.last_run.result) : 'Never run'"></span>
+                      <button class="favorite-star rb-log-btn" @click.stop.prevent="openRunLog(rb)" title="Run log"><i class="bi bi-clock-history"></i></button>
+                      <button class="favorite-star rb-share-btn" @click.stop.prevent="openRbShareModal(rb)" title="Share"><i class="bi bi-share"></i></button>
+                      <template x-if="rb.status !== 'published'">
+                        <button class="favorite-star rb-edit-btn" @click.stop.prevent="openRbModal(rb)" title="Edit"><i class="bi bi-pencil"></i></button>
+                      </template>
+                      <template x-if="rb.status === 'private'">
+                        <button class="favorite-star rb-publish-btn" @click.stop.prevent="openRbPublishModal(rb)" title="Request publish"><i class="bi bi-megaphone"></i></button>
+                      </template>
+                      <template x-if="rb.status !== 'published'">
+                        <button class="favorite-star rb-delete-btn" @click.stop.prevent="deleteRunbook(rb)" title="Delete"><i class="bi bi-trash"></i></button>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
+
+            <template x-if="runbooks.shared.length">
+              <div style="margin-bottom:1.25rem;">
+                <div class="quicklink-group-label">Shared with me</div>
+                <div class="card-grid">
+                  <template x-for="rb in runbooks.shared" :key="'shared-' + rb.id">
+                    <div class="app-card runbook-card">
+                      <button type="button" class="app-card-hit" @click="openRunModal(rb)" :aria-label="'Run ' + rb.name"></button>
+                      <span class="icon"><i class="bi bi-terminal"></i></span>
+                      <span class="meta">
+                        <span class="name" x-text="rb.name"></span>
+                        <span class="description" x-text="'from ' + rb.owner_username"></span>
+                      </span>
+                      <span class="status-dot" :class="{up: rb.last_run && rb.last_run.result === 'success', down: rb.last_run && rb.last_run.result !== 'success'}" :title="rb.last_run ? ('Last run: ' + rb.last_run.result) : 'Never run'"></span>
+                      <button class="favorite-star rb-log-btn" @click.stop.prevent="openRunLog(rb)" title="Run log"><i class="bi bi-clock-history"></i></button>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
+
+            <template x-if="runbooks.public.length">
+              <div>
+                <div class="quicklink-group-label">Available to you</div>
+                <div class="card-grid">
+                  <template x-for="rb in runbooks.public" :key="'public-' + rb.id">
+                    <div class="app-card runbook-card">
+                      <button type="button" class="app-card-hit" @click="openRunModal(rb)" :aria-label="'Run ' + rb.name"></button>
+                      <span class="icon"><i class="bi bi-terminal"></i></span>
+                      <span class="meta">
+                        <span class="name" x-text="rb.name"></span>
+                        <span class="description" x-text="'by ' + rb.owner_username"></span>
+                      </span>
+                      <span class="status-dot" :class="{up: rb.last_run && rb.last_run.result === 'success', down: rb.last_run && rb.last_run.result !== 'success'}" :title="rb.last_run ? ('Last run: ' + rb.last_run.result) : 'Never run'"></span>
+                      <button class="favorite-star rb-log-btn" @click.stop.prevent="openRunLog(rb)" title="Run log"><i class="bi bi-clock-history"></i></button>
+                    </div>
+                  </template>
+                </div>
               </div>
             </template>
           </div>
@@ -475,6 +564,180 @@
             <button class="btn-sm primary" type="submit">Send request</button>
           </div>
         </form>
+      </div>
+    </div>
+  </template>
+
+  <!-- ================= RUNBOOK CREATE/EDIT MODAL ================= -->
+  <template x-if="rbModalOpen">
+    <div class="modal-backdrop" @click.self="rbModalOpen = false">
+      <div class="modal" style="max-width:520px;" role="dialog" aria-modal="true" :aria-label="rbEditingId ? 'Edit RunBook' : 'New RunBook'">
+        <h3 x-text="rbEditingId ? 'Edit RunBook' : (rbShowCurlBox ? 'New RunBook from curl' : 'New RunBook')"></h3>
+
+        <template x-if="rbShowCurlBox">
+          <div class="field" style="background:var(--surface-hover);border-radius:10px;padding:0.6rem 0.75rem;">
+            <label>Paste a curl command</label>
+            <textarea x-model="rbCurlInput" x-ref="rbCurlTextarea" rows="3" placeholder="curl -X POST https://api.example.com/x -H 'Authorization: Bearer {{env:TOKEN}}' -d '{...}'" style="font-family:var(--font-mono);font-size:0.78rem;"></textarea>
+            <button type="button" class="btn-sm" style="margin-top:0.4rem;" @click="applyCurlParse()"><i class="bi bi-magic"></i> Parse into fields below</button>
+            <p class="help-text" style="margin:0.4rem 0 0;font-size:0.72rem;">Reads -X/--request, -H/--header, -d/--data(-raw/-binary). Other flags are ignored.</p>
+          </div>
+        </template>
+        <template x-if="!rbShowCurlBox">
+          <button type="button" class="btn-sm" style="margin-bottom:0.9rem;" @click="rbShowCurlBox = true"><i class="bi bi-terminal"></i> Paste from curl instead</button>
+        </template>
+
+        <template x-if="rbError">
+          <div style="color:var(--down);font-size:0.85rem;margin-bottom:0.75rem;" x-text="rbError"></div>
+        </template>
+        <form @submit.prevent="saveRunbook()">
+          <div class="field"><label>Name</label><input type="text" x-model="rbForm.name" required></div>
+          <div class="form-row" style="display:flex;gap:0.6rem;">
+            <div class="field" style="flex:0 0 110px;">
+              <label>Method</label>
+              <select x-model="rbForm.method">
+                <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
+              </select>
+            </div>
+            <div class="field" style="flex:1;"><label>URL</label><input type="text" x-model="rbForm.url" placeholder="{{env:BASE_URL}}/path/{{user:id}}" required></div>
+          </div>
+          <div class="field"><label>Description (optional)</label><input type="text" x-model="rbForm.description"></div>
+          <div class="field">
+            <label>Headers (one per line, optional)</label>
+            <textarea x-model="rbForm.headers" rows="2" placeholder="Authorization: Bearer {{env:API_TOKEN}}" style="font-family:var(--font-mono);font-size:0.8rem;"></textarea>
+          </div>
+          <div class="field">
+            <label>Body (optional)</label>
+            <textarea x-model="rbForm.body" rows="2" style="font-family:var(--font-mono);font-size:0.8rem;"></textarea>
+          </div>
+          <div class="field">
+            <label>Variables prompted from whoever runs it (comma-separated names, optional)</label>
+            <input type="text" x-model="rbForm.user_variable_names" placeholder="ticket_id, priority">
+          </div>
+          <p class="help-text" style="margin:-0.3rem 0 0.75rem;">
+            Reference values as <code>{{env:NAME}}</code> (set up by an admin) or <code>{{user:NAME}}</code> (declared above,
+            asked for on every run) in the URL, headers, or body.
+          </p>
+          <div class="form-row" style="display:flex;gap:0.6rem;">
+            <div class="field" style="flex:1;"><label>Success keyword (optional)</label><input type="text" x-model="rbForm.success_keyword"></div>
+            <div class="field" style="flex:1;"><label>Failure keyword (optional)</label><input type="text" x-model="rbForm.failure_keyword"></div>
+          </div>
+          <p class="help-text" style="margin:-0.3rem 0 0.75rem;">
+            No keywords set → judged by HTTP status (2xx/3xx = success). Failure keyword wins if both match.
+          </p>
+          <div class="field"><label>Notify email on each run (optional)</label><input type="email" x-model="rbForm.notify_email" placeholder="team@example.com"></div>
+          <div class="modal-actions">
+            <button type="button" class="btn-sm" @click="rbModalOpen = false">Cancel</button>
+            <button class="btn-sm primary" type="submit" :disabled="rbSaving">
+              <span x-text="rbSaving ? 'Saving…' : 'Save'"></span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </template>
+
+  <!-- ================= RUNBOOK RUN MODAL ================= -->
+  <template x-if="rbRunModalOpen">
+    <div class="modal-backdrop" @click.self="rbRunModalOpen = false">
+      <div class="modal" style="max-width:440px;" role="dialog" aria-modal="true" aria-label="Run RunBook">
+        <h3 x-text="'Run: ' + (rbRunTarget ? rbRunTarget.name : '')"></h3>
+        <template x-for="name in (rbRunTarget ? rbRequiredVars(rbRunTarget) : [])" :key="name">
+          <div class="field"><label x-text="name"></label><input type="text" x-model="rbRunVars[name]"></div>
+        </template>
+        <template x-if="rbRunResult">
+          <div style="margin:0.75rem 0;padding:0.75rem;border-radius:8px;background:var(--surface);border:1px solid var(--border);">
+            <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.4rem;">
+              <span class="pill" :class="{up: rbRunResult.result==='success', down: rbRunResult.result!=='success'}" x-text="rbRunResult.result"></span>
+              <span style="font-size:0.78rem;color:var(--ink-soft);" x-text="(rbRunResult.http_status || 'no response') + ' · ' + rbRunResult.duration_ms + 'ms'"></span>
+            </div>
+            <template x-if="rbRunResult.error_message">
+              <div style="font-size:0.78rem;color:var(--down);margin-bottom:0.4rem;" x-text="rbRunResult.error_message"></div>
+            </template>
+            <p style="white-space:pre-wrap;word-break:break-word;font-family:var(--font-mono);font-size:0.76rem;max-height:180px;overflow-y:auto;margin:0;" x-text="rbRunResult.response_snippet || '(empty response)'"></p>
+          </div>
+        </template>
+        <div class="modal-actions">
+          <button type="button" class="btn-sm" @click="rbRunModalOpen = false">Close</button>
+          <button class="btn-sm primary" :disabled="rbRunning" @click="executeRun()">
+            <span x-text="rbRunning ? 'Running…' : 'Run now'"></span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- ================= RUNBOOK SHARE MODAL ================= -->
+  <template x-if="rbShareModalOpen">
+    <div class="modal-backdrop" @click.self="rbShareModalOpen = false">
+      <div class="modal" style="max-width:380px;" role="dialog" aria-modal="true" aria-label="Share RunBook">
+        <h3>Share RunBook</h3>
+        <p class="help-text" style="margin-bottom:0.75rem;">Pick who else can see and run this RunBook.</p>
+        <div style="max-height:280px;overflow-y:auto;display:flex;flex-direction:column;gap:0.3rem;">
+          <template x-if="!rbAllUsers.length">
+            <p style="font-size:0.82rem;color:var(--ink-soft);">No other users exist yet.</p>
+          </template>
+          <template x-for="u in rbAllUsers" :key="u.id">
+            <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;cursor:pointer;">
+              <input type="checkbox" :checked="rbShareUserIds.includes(u.id)" @change="toggleRbShareUser(u.id)">
+              <span x-text="u.username"></span>
+            </label>
+          </template>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn-sm" @click="rbShareModalOpen = false">Cancel</button>
+          <button class="btn-sm primary" @click="saveRbShares()">Save sharing</button>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- ================= RUNBOOK PUBLISH REQUEST MODAL ================= -->
+  <template x-if="rbPublishModalOpen">
+    <div class="modal-backdrop" @click.self="rbPublishModalOpen = false">
+      <div class="modal" style="max-width:420px;" role="dialog" aria-modal="true" aria-label="Request publish">
+        <h3>Request to make this generally available</h3>
+        <p class="help-text" style="margin-bottom:0.75rem;">
+          An admin will review this and, if approved, this RunBook becomes visible to a wider audience — it stays the
+          same RunBook, just with broader visibility.
+        </p>
+        <form @submit.prevent="submitRbPublishRequest()">
+          <div class="field"><label>Remarks for the admin (optional)</label><textarea x-model="rbPublishRemarks" rows="3" placeholder="Why should this be available more broadly?"></textarea></div>
+          <div class="modal-actions">
+            <button type="button" class="btn-sm" @click="rbPublishModalOpen = false">Cancel</button>
+            <button class="btn-sm primary" type="submit">Send request</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </template>
+
+  <!-- ================= RUNBOOK RUN LOG MODAL ================= -->
+  <template x-if="rbLogModalOpen">
+    <div class="modal-backdrop" @click.self="rbLogModalOpen = false">
+      <div class="modal" style="max-width:560px;" role="dialog" aria-modal="true" aria-label="Run log">
+        <h3 x-text="'Run log: ' + (rbLogTarget ? rbLogTarget.name : '')"></h3>
+        <template x-if="rbLogLoading">
+          <div class="empty-state" style="padding:1rem 0;">Loading…</div>
+        </template>
+        <template x-if="!rbLogLoading && !rbLogRuns.length">
+          <div class="empty-state" style="padding:1rem 0;">No runs yet.</div>
+        </template>
+        <template x-if="!rbLogLoading && rbLogRuns.length">
+          <div style="max-height:400px;overflow-y:auto;display:flex;flex-direction:column;gap:0.5rem;">
+            <template x-for="run in rbLogRuns" :key="run.id">
+              <div style="padding:0.6rem 0.75rem;border-radius:8px;background:var(--surface);border:1px solid var(--border);">
+                <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+                  <span class="pill" :class="{up: run.result==='success', down: run.result!=='success'}" x-text="run.result"></span>
+                  <span style="font-size:0.75rem;color:var(--ink-soft);" x-text="(run.http_status || 'no response') + ' · ' + run.duration_ms + 'ms · ' + (run.triggered_by === 'automator' ? 'Automator' : (run.run_by_username || 'unknown'))"></span>
+                  <span style="font-family:var(--font-mono);font-size:0.7rem;color:var(--ink-soft);margin-left:auto;" x-text="run.created_at"></span>
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
+        <div class="modal-actions">
+          <button class="btn-sm" @click="rbLogModalOpen = false">Close</button>
+        </div>
       </div>
     </div>
   </template>

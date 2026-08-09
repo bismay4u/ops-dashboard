@@ -211,6 +211,106 @@ CREATE TABLE IF NOT EXISTS quick_link_publish_requests (
   resolved_at TEXT
 );
 
+-- RunBooks: a saved, parameterized HTTP request a user can re-run on demand (or on a
+-- schedule via an Automator). Status/visibility mirror QuickLinks + items: private ->
+-- pending_publish -> published, with visibility/roles only meaningful once published
+-- (before that, access is owner + runbook_shares only, same as a QuickLink).
+-- url/headers/body may contain {{env:NAME}} (admin-managed environment_variables) and
+-- {{user:NAME}} (prompted from whoever runs it) placeholders — user_variable_names is
+-- the comma-separated declaration of which {{user:*}} names a run must supply.
+CREATE TABLE IF NOT EXISTS runbooks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  description TEXT DEFAULT '',
+  method TEXT NOT NULL DEFAULT 'GET',
+  url TEXT NOT NULL,
+  headers TEXT DEFAULT '',
+  body TEXT DEFAULT '',
+  user_variable_names TEXT DEFAULT '',
+  success_keyword TEXT,
+  failure_keyword TEXT,
+  notify_email TEXT,
+  visibility TEXT NOT NULL DEFAULT 'authenticated', -- only applied once status = 'published'
+  status TEXT NOT NULL DEFAULT 'private', -- 'private' | 'pending_publish' | 'published'
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS runbook_shares (
+  runbook_id INTEGER NOT NULL REFERENCES runbooks(id) ON DELETE CASCADE,
+  shared_with_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY (runbook_id, shared_with_user_id)
+);
+
+-- Same shape as item_roles/dashboard_roles — which roles can see a published,
+-- visibility='roles' RunBook.
+CREATE TABLE IF NOT EXISTS runbook_roles (
+  runbook_id INTEGER NOT NULL REFERENCES runbooks(id) ON DELETE CASCADE,
+  role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+  PRIMARY KEY (runbook_id, role_id)
+);
+
+-- A user's ask to make their private RunBook generally available. Unlike a QuickLink
+-- publish request, approval doesn't create a new row elsewhere — it just sets the
+-- RunBook's own visibility/roles and flips status to 'published' in place, since a
+-- RunBook stays the same executable thing either way.
+CREATE TABLE IF NOT EXISTS runbook_publish_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  runbook_id INTEGER NOT NULL REFERENCES runbooks(id) ON DELETE CASCADE,
+  requested_by_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  remarks TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',
+  admin_remarks TEXT,
+  resolved_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT DEFAULT (datetime('now')),
+  resolved_at TEXT
+);
+
+-- Admin-managed key/value store referenced by {{env:NAME}} in RunBook templates —
+-- values are never returned to non-admin API responses, only substituted server-side.
+CREATE TABLE IF NOT EXISTS environment_variables (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT UNIQUE NOT NULL,
+  value TEXT NOT NULL,
+  description TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Run log. Deliberately does NOT persist resolved request headers/body (which may
+-- contain secret env var values) — only the resolved URL, what came back, and the
+-- pass/fail verdict. Visible to the runbook's owner/shared users/admin, same as who
+-- can run it.
+CREATE TABLE IF NOT EXISTS runbook_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  runbook_id INTEGER NOT NULL REFERENCES runbooks(id) ON DELETE CASCADE,
+  run_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  triggered_by TEXT NOT NULL DEFAULT 'manual', -- 'manual' | 'automator'
+  request_method TEXT,
+  request_url TEXT,
+  http_status INTEGER,
+  response_snippet TEXT,
+  result TEXT NOT NULL, -- 'success' | 'failed' | 'error'
+  error_message TEXT,
+  duration_ms INTEGER,
+  notified INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Admin-only schedule: run a RunBook every interval_minutes. A single background tick
+-- (see services/automatorRunner.js) checks all enabled rows rather than one JS timer
+-- per automator, so add/remove/interval-change need no timer bookkeeping and it's
+-- correct across server restarts.
+CREATE TABLE IF NOT EXISTS automators (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  runbook_id INTEGER NOT NULL UNIQUE REFERENCES runbooks(id) ON DELETE CASCADE,
+  interval_minutes INTEGER NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  last_run_at TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_items_dashboard ON items(dashboard_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_item ON feedback(item_id);
 CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
@@ -219,6 +319,10 @@ CREATE INDEX IF NOT EXISTS idx_events_item ON events(item_id);
 CREATE INDEX IF NOT EXISTS idx_quicklinks_owner ON quick_links(owner_user_id);
 CREATE INDEX IF NOT EXISTS idx_quicklink_shares_user ON quick_link_shares(shared_with_user_id);
 CREATE INDEX IF NOT EXISTS idx_quicklink_requests_status ON quick_link_publish_requests(status);
+CREATE INDEX IF NOT EXISTS idx_runbooks_owner ON runbooks(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_runbook_shares_user ON runbook_shares(shared_with_user_id);
+CREATE INDEX IF NOT EXISTS idx_runbook_requests_status ON runbook_publish_requests(status);
+CREATE INDEX IF NOT EXISTS idx_runbook_runs_runbook ON runbook_runs(runbook_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_categories_dashboard ON categories(dashboard_id);
 CREATE INDEX IF NOT EXISTS idx_sections_dashboard ON sections(dashboard_id);
 CREATE INDEX IF NOT EXISTS idx_status_log_item ON status_log(item_id, checked_at);
@@ -250,6 +354,12 @@ ensureColumn('items', 'notes_visibility', `notes_visibility TEXT NOT NULL DEFAUL
 ensureColumn('feedback', 'status', `status TEXT NOT NULL DEFAULT 'open'`);
 ensureColumn('feedback', 'closed_at', 'closed_at TEXT');
 ensureColumn('events', 'quicklink_id', 'quicklink_id INTEGER REFERENCES quick_links(id) ON DELETE SET NULL');
+ensureColumn('branding', 'quicklinks_enabled', 'quicklinks_enabled INTEGER NOT NULL DEFAULT 1');
+ensureColumn('branding', 'runbooks_enabled', 'runbooks_enabled INTEGER NOT NULL DEFAULT 1');
+ensureColumn('branding', 'remember_last_tab_enabled', 'remember_last_tab_enabled INTEGER NOT NULL DEFAULT 1');
+// Soft delete only, same precedent as users.deleted_at — shares/roles are left
+// untouched so restoring a RunBook brings its sharing/visibility config back as-is.
+ensureColumn('runbooks', 'deleted_at', 'deleted_at TEXT DEFAULT NULL');
 const hadOldTeamColumn = hasColumn('users', 'team');
 const hadOldRoleColumn = hasColumn('users', 'role');
 const hadOldSectionColumn = hasColumn('categories', 'section');

@@ -74,12 +74,34 @@ function adminApp() {
     qlApproveCategories: [],
     qlApproveCategoryId: null,
 
+    // environment variables
+    envVars: [],
+    envVarModalOpen: false,
+    envVarForm: { name: '', value: '', description: '' },
+    envVarEditingId: null,
+    revealedEnvVarIds: [],
+
+    // runbooks (monitoring + publish requests + automators)
+    runbooksAdmin: [],
+    rbPublishRequests: [],
+    rbApproveModalOpen: false,
+    rbApproveMode: 'request', // 'request' (resolve a pending publish request) | 'force' (admin-initiated, no request)
+    rbApproveRequestId: null,
+    rbForcePublishRunbookId: null,
+    rbApproveVisibility: 'authenticated',
+    rbApproveRoleIds: [],
+    deletedRunbooksModalOpen: false,
+    deletedRunbooks: [],
+    automators: [],
+    automatorModalOpen: false,
+    automatorForm: { runbook_id: null, interval_minutes: 60 },
+
     // branding — form state for the Branding tab, plus what's currently applied
     appTitle: 'Ops Dashboard',
     logoUrl: null,
     watermarkUrl: null,
     watermarkOpacity: 0.08,
-    branding: { app_title: '', logo_data: null, background_data: null, watermark_data: null, watermark_opacity: 0.08, accent_color: null },
+    branding: { app_title: '', logo_data: null, background_data: null, watermark_data: null, watermark_opacity: 0.08, accent_color: null, quicklinks_enabled: true, runbooks_enabled: true, remember_last_tab_enabled: true },
 
     updateRunning: false,
     updateResult: null,
@@ -127,6 +149,9 @@ function adminApp() {
           watermark_data: b.watermark_data || null,
           watermark_opacity: b.watermark_opacity ?? 0.08,
           accent_color: b.accent_color || null,
+          quicklinks_enabled: b.quicklinks_enabled === undefined ? true : !!b.quicklinks_enabled,
+          runbooks_enabled: b.runbooks_enabled === undefined ? true : !!b.runbooks_enabled,
+          remember_last_tab_enabled: b.remember_last_tab_enabled === undefined ? true : !!b.remember_last_tab_enabled,
         };
         this.applyBranding(b);
       } catch (e) { /* branding is cosmetic — a failed fetch just keeps defaults */ }
@@ -666,6 +691,139 @@ function adminApp() {
       this.pushToast('Request rejected', 'success');
       await this.loadQlPublishRequests();
       await this.loadQuickLinksAdmin();
+    },
+
+    // ---------- environment variables ----------
+    async loadEnvVars() {
+      const data = await this.api('/environment-variables');
+      this.envVars = data.variables;
+    },
+    openEnvVarModal(v = null) {
+      this.envVarForm = v ? { name: v.name, value: v.value, description: v.description || '' } : { name: '', value: '', description: '' };
+      this.envVarEditingId = v ? v.id : null;
+      this.envVarModalOpen = true;
+    },
+    async saveEnvVar() {
+      if (!this.envVarForm.name.trim() || !this.envVarForm.value) { this.pushToast('Name and value are required', 'error'); return; }
+      if (this.envVarEditingId) {
+        await this.api(`/environment-variables/${this.envVarEditingId}`, { method: 'PUT', body: JSON.stringify(this.envVarForm) });
+        this.pushToast('Environment variable updated', 'success');
+      } else {
+        await this.api('/environment-variables', { method: 'POST', body: JSON.stringify(this.envVarForm) });
+        this.pushToast('Environment variable created', 'success');
+      }
+      this.envVarModalOpen = false;
+      await this.loadEnvVars();
+    },
+    async deleteEnvVar(v) {
+      if (!confirm(`Delete "${v.name}"? Any RunBook referencing {{env:${v.name}}} will leave that placeholder unresolved.`)) return;
+      await this.api(`/environment-variables/${v.id}`, { method: 'DELETE' });
+      this.pushToast('Deleted', 'success');
+      await this.loadEnvVars();
+    },
+    toggleRevealEnvVar(id) {
+      const idx = this.revealedEnvVarIds.indexOf(id);
+      if (idx === -1) this.revealedEnvVarIds.push(id);
+      else this.revealedEnvVarIds.splice(idx, 1);
+    },
+
+    // ---------- runbooks: monitoring ----------
+    async loadRunbooksAdmin() {
+      const data = await this.api('/runbooks');
+      this.runbooksAdmin = data.runbooks;
+    },
+    async deleteRunbookAdmin(rb) {
+      if (!confirm(`Delete "${rb.name}" (owned by ${rb.owner_username})? This removes it from their view — it can be restored from "Deleted RunBooks".`)) return;
+      await this.api(`/runbooks/${rb.id}`, { method: 'DELETE' });
+      this.pushToast('RunBook deleted', 'success');
+      await this.loadRunbooksAdmin();
+    },
+    async openDeletedRunbooksModal() {
+      const data = await this.api('/runbooks/deleted');
+      this.deletedRunbooks = data.runbooks;
+      this.deletedRunbooksModalOpen = true;
+    },
+    async restoreRunbook(rb) {
+      await this.api(`/runbooks/${rb.id}/restore`, { method: 'POST' });
+      this.pushToast(`Restored "${rb.name}"`, 'success');
+      await this.openDeletedRunbooksModal();
+      await this.loadRunbooksAdmin();
+    },
+
+    // ---------- runbooks: publish requests ----------
+    async loadRbPublishRequests() {
+      const data = await this.api('/runbooks/publish-requests?status=pending');
+      this.rbPublishRequests = data.requests;
+    },
+    openRbApproveModal(request) {
+      this.rbApproveMode = 'request';
+      this.rbApproveRequestId = request.id;
+      this.rbApproveVisibility = 'authenticated';
+      this.rbApproveRoleIds = [];
+      this.rbApproveModalOpen = true;
+    },
+    openRbForcePublishModal(rb) {
+      this.rbApproveMode = 'force';
+      this.rbForcePublishRunbookId = rb.id;
+      this.rbApproveVisibility = rb.visibility && rb.visibility !== 'authenticated' ? rb.visibility : 'authenticated';
+      this.rbApproveRoleIds = [];
+      this.rbApproveModalOpen = true;
+    },
+    toggleRbApproveRole(roleId) {
+      const idx = this.rbApproveRoleIds.indexOf(roleId);
+      if (idx === -1) this.rbApproveRoleIds.push(roleId);
+      else this.rbApproveRoleIds.splice(idx, 1);
+    },
+    async approveRbRequest() {
+      const body = JSON.stringify({ visibility: this.rbApproveVisibility, role_ids: this.rbApproveRoleIds });
+      if (this.rbApproveMode === 'force') {
+        await this.api(`/runbooks/${this.rbForcePublishRunbookId}/force-publish`, { method: 'POST', body });
+        this.pushToast('Force-published', 'success');
+      } else {
+        await this.api(`/runbooks/publish-requests/${this.rbApproveRequestId}/approve`, { method: 'POST', body });
+        this.pushToast('Approved — now visible per its visibility setting', 'success');
+      }
+      this.rbApproveModalOpen = false;
+      await this.loadRbPublishRequests();
+      await this.loadRunbooksAdmin();
+    },
+    async rejectRbRequest(request) {
+      const admin_remarks = prompt('Reason for rejecting (optional):') || '';
+      await this.api(`/runbooks/publish-requests/${request.id}/reject`, { method: 'POST', body: JSON.stringify({ admin_remarks }) });
+      this.pushToast('Request rejected', 'success');
+      await this.loadRbPublishRequests();
+      await this.loadRunbooksAdmin();
+    },
+
+    // ---------- runbooks: automators ----------
+    async loadAutomators() {
+      const data = await this.api('/automators');
+      this.automators = data.automators;
+    },
+    automatorEligibleRunbooks() {
+      const scheduled = new Set(this.automators.map(a => a.runbook_id));
+      return this.runbooksAdmin.filter(rb => !scheduled.has(rb.id) && !(rb.user_variable_names || '').trim());
+    },
+    openAutomatorModal() {
+      this.automatorForm = { runbook_id: null, interval_minutes: 60 };
+      this.automatorModalOpen = true;
+    },
+    async createAutomator() {
+      if (!this.automatorForm.runbook_id) { this.pushToast('Pick a RunBook first', 'error'); return; }
+      await this.api('/automators', { method: 'POST', body: JSON.stringify(this.automatorForm) });
+      this.automatorModalOpen = false;
+      this.pushToast('Automator created', 'success');
+      await this.loadAutomators();
+    },
+    async toggleAutomator(a) {
+      await this.api(`/automators/${a.id}`, { method: 'PUT', body: JSON.stringify({ enabled: a.enabled ? 0 : 1 }) });
+      await this.loadAutomators();
+    },
+    async deleteAutomator(a) {
+      if (!confirm(`Remove the automator for "${a.runbook_name}"?`)) return;
+      await this.api(`/automators/${a.id}`, { method: 'DELETE' });
+      this.pushToast('Automator removed', 'success');
+      await this.loadAutomators();
     },
 
     // ---------- backup / json ----------
