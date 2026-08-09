@@ -413,7 +413,7 @@ router.put('/settings', (req, res) => {
 // process alone so a bad update doesn't take the site down.
 router.post('/update', (req, res) => {
   const repoRoot = path.join(__dirname, '..', '..');
-  exec('git pull origin main', { cwd: repoRoot, timeout: 60000 }, (err, stdout, stderr) => {
+  exec('git pull origin HEAD', { cwd: repoRoot, timeout: 60000 }, (err, stdout, stderr) => {
     if (err) return res.status(500).json({ ok: false, step: 'git_pull', error: err.message, stdout, stderr });
     res.json({ ok: true, stdout, stderr, restarting: true });
     setTimeout(() => {
