@@ -29,7 +29,7 @@
 <template x-if="authChecked && user && user.roles.includes('admin')">
 <div class="admin-layout">
   <aside class="admin-sidebar">
-    <template x-if="logoUrl"><img :src="logoUrl" class="brand-logo" alt="Logo"></template>
+    <template x-if="logoUrl"><img :src="logoUrl" class="brand-logo brand-logo-admin" alt="Logo"></template>
     <template x-if="!logoUrl"><div class="brand" x-text="appTitle"></div></template>
     <nav class="admin-nav">
       <button :class="{active: tab==='dashboards'}" @click="tab='dashboards'"><i class="bi bi-grid-1x2"></i> Dashboards</button>

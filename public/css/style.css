@@ -131,6 +131,7 @@ body {
   white-space: nowrap;
 }
 .brand-logo { max-height: 28px; display: block; }
+.brand-logo-admin { display: none;}
 
 /* Fixed behind the nav/cards (which have their own opaque surfaces) so it only
    shows through empty page background — no z-index tricks needed beyond a low
