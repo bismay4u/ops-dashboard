@@ -123,6 +123,112 @@ function dashboardApp() {
       }
     },
 
+    // QuickLinks — personal sidebar bookmarks (distinct from admin-managed items)
+    quickLinks: { own: [], shared: [] },
+    qlModalOpen: false,
+    qlForm: { name: '', url: '', description: '' },
+    qlEditingId: null,
+    qlError: null,
+    qlSaving: false,
+    qlShareModalOpen: false,
+    qlShareLinkId: null,
+    qlShareUserIds: [],
+    qlAllUsers: [],
+    qlPublishModalOpen: false,
+    qlPublishLinkId: null,
+    qlPublishRemarks: '',
+
+    // Once published, a QuickLink is now a normal dashboard item too — keep it out of
+    // the sidebar so it isn't shown twice; it stays in quickLinks.own for the record.
+    activeOwnQuickLinks() {
+      return this.quickLinks.own.filter(l => l.status !== 'published');
+    },
+    async loadQuickLinks() {
+      if (!this.user) { this.quickLinks = { own: [], shared: [] }; return; }
+      try {
+        const res = await fetch('/api/quicklinks', { credentials: 'include' });
+        if (res.ok) this.quickLinks = await res.json();
+      } catch (e) { /* sidebar is supplementary — a failed fetch just leaves it empty */ }
+    },
+    openQlModal(link = null) {
+      this.qlForm = link ? { name: link.name, url: link.url, description: link.description || '' } : { name: '', url: '', description: '' };
+      this.qlEditingId = link ? link.id : null;
+      this.qlError = null;
+      this.qlModalOpen = true;
+    },
+    async saveQuickLink() {
+      if (!this.qlForm.name.trim() || !this.qlForm.url.trim()) {
+        this.qlError = 'Name and URL are required.';
+        return;
+      }
+      this.qlSaving = true;
+      this.qlError = null;
+      try {
+        const path = this.qlEditingId ? `/api/quicklinks/${this.qlEditingId}` : '/api/quicklinks';
+        const method = this.qlEditingId ? 'PUT' : 'POST';
+        const res = await fetch(path, {
+          method, headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+          body: JSON.stringify(this.qlForm),
+        });
+        if (!res.ok) throw new Error();
+        this.qlModalOpen = false;
+        await this.loadQuickLinks();
+        this.pushToast(this.qlEditingId ? 'QuickLink updated' : 'QuickLink added', 'success');
+      } catch (e) {
+        this.qlError = 'Could not save — try again.';
+      } finally {
+        this.qlSaving = false;
+      }
+    },
+    async deleteQuickLink(link) {
+      if (!confirm(`Delete "${link.name}"?`)) return;
+      await fetch(`/api/quicklinks/${link.id}`, { method: 'DELETE', credentials: 'include' });
+      await this.loadQuickLinks();
+      this.pushToast('QuickLink deleted', 'success');
+    },
+    touchQuickLink(link) {
+      // Fire-and-forget, same pattern as markUsed() for dashboard items — don't block navigation.
+      fetch(`/api/quicklinks/${link.id}/touch`, { method: 'POST', credentials: 'include' }).catch(() => {});
+    },
+    async openShareModal(link) {
+      this.qlShareLinkId = link.id;
+      this.qlShareModalOpen = true;
+      const [usersData, sharesData] = await Promise.all([
+        fetch('/api/quicklinks/_users', { credentials: 'include' }).then(r => r.json()),
+        fetch(`/api/quicklinks/${link.id}/shares`, { credentials: 'include' }).then(r => r.json()),
+      ]);
+      this.qlAllUsers = usersData.users;
+      this.qlShareUserIds = sharesData.user_ids;
+    },
+    toggleQlShareUser(userId) {
+      const idx = this.qlShareUserIds.indexOf(userId);
+      if (idx === -1) this.qlShareUserIds.push(userId);
+      else this.qlShareUserIds.splice(idx, 1);
+    },
+    async saveShares() {
+      await fetch(`/api/quicklinks/${this.qlShareLinkId}/share`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+        body: JSON.stringify({ user_ids: this.qlShareUserIds }),
+      });
+      this.qlShareModalOpen = false;
+      await this.loadQuickLinks();
+      this.pushToast('Sharing updated', 'success');
+    },
+    openPublishModal(link) {
+      this.qlPublishLinkId = link.id;
+      this.qlPublishRemarks = '';
+      this.qlPublishModalOpen = true;
+    },
+    async submitPublishRequest() {
+      await fetch(`/api/quicklinks/${this.qlPublishLinkId}/publish-request`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+        body: JSON.stringify({ remarks: this.qlPublishRemarks }),
+      });
+      this.qlPublishModalOpen = false;
+      await this.loadQuickLinks();
+      this.pushToast('Publish request sent to admins', 'success');
+    },
+
     // dashboards
     dashboards: [],
     activeSlug: null,
@@ -167,6 +273,7 @@ function dashboardApp() {
       // Dashboards load regardless of login — the API filters by visibility itself,
       // so anonymous visitors see whatever's public and nothing more.
       await this.loadDashboardList();
+      await this.loadQuickLinks();
     },
 
     registerServiceWorker() {
@@ -219,6 +326,7 @@ function dashboardApp() {
         this.loginForm = { username: '', password: '', mapIp: true };
         this.pushToast(`Signed in as ${data.user.username}`, 'success');
         await this.loadDashboardList(); // reload — more may now be visible
+        await this.loadQuickLinks();
       } catch (e) {
         this.loginError = 'Could not reach the server.';
       } finally {
@@ -238,6 +346,7 @@ function dashboardApp() {
       if (this.sortMode === 'recent') this.sortMode = 'name';
       if (this.statusPollHandle) clearInterval(this.statusPollHandle);
       if (forgetDevice) this.pushToast('Signed out and forgot this device.', 'success');
+      this.quickLinks = { own: [], shared: [] };
       await this.loadDashboardList(); // reload — drop back to public-only view
     },
 

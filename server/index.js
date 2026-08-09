@@ -15,6 +15,7 @@ const adminRoutes = require('./routes/admin');
 const statusRoutes = require('./routes/status');
 const settingsRoutes = require('./routes/settings');
 const analyticsRoutes = require('./routes/analytics');
+const quicklinksRoutes = require('./routes/quicklinks');
 
 const app = express();
 
@@ -36,6 +37,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/status', statusRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/admin/analytics', analyticsRoutes);
+app.use('/api/quicklinks', quicklinksRoutes);
 
 // Off by default (normal browser caching applies). Set DISABLE_STATIC_CACHE=true
 // in .env to force no-cache on .css/.js while iterating on the frontend, so

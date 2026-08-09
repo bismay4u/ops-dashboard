@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -n '`' server/db.js)",
+      "Bash(node -e ' *)",
+      "Bash(node --check server/routes/admin.js)",
+      "Bash(node --check server/routes/quicklinks.js)",
+      "Bash(node --check server/index.js)"
+    ]
+  }
+}

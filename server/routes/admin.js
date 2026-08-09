@@ -428,6 +428,100 @@ router.delete('/feedback/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- Quick Links (monitoring + publish requests) ----------
+// GET /admin/quicklinks -> every user's QuickLink, who it's shared with, and its
+// all-time click count — the "who's sharing what with whom, and is it used" view.
+router.get('/quicklinks', (req, res) => {
+  const rows = db.prepare(`
+    SELECT ql.id, ql.name, ql.url, ql.description, ql.status, ql.created_at, u.username AS owner_username
+    FROM quick_links ql JOIN users u ON u.id = ql.owner_user_id
+    ORDER BY ql.created_at DESC
+  `).all();
+  const ids = rows.map(r => r.id);
+  const shareMap = {};
+  const usageMap = {};
+  if (ids.length) {
+    const placeholders = ids.map(() => '?').join(',');
+    const shareRows = db.prepare(`
+      SELECT s.quick_link_id, u.username FROM quick_link_shares s JOIN users u ON u.id = s.shared_with_user_id
+      WHERE s.quick_link_id IN (${placeholders})
+    `).all(...ids);
+    for (const r of shareRows) (shareMap[r.quick_link_id] = shareMap[r.quick_link_id] || []).push(r.username);
+    const usageRows = db.prepare(`
+      SELECT quicklink_id, COUNT(*) AS c FROM events
+      WHERE category = 'quicklink' AND action = 'follow_quicklink' AND quicklink_id IN (${placeholders})
+      GROUP BY quicklink_id
+    `).all(...ids);
+    for (const r of usageRows) usageMap[r.quicklink_id] = r.c;
+  }
+  const quicklinks = rows.map(r => ({ ...r, shared_with: shareMap[r.id] || [], usage_count: usageMap[r.id] || 0 }));
+  res.json({ quicklinks });
+});
+
+router.delete('/quicklinks/:id', (req, res) => {
+  db.prepare('DELETE FROM quick_links WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+router.get('/quicklinks/publish-requests', (req, res) => {
+  const status = req.query.status || 'pending';
+  const where = status === 'all' ? '' : 'WHERE r.status = ?';
+  const rows = db.prepare(`
+    SELECT r.id, r.remarks, r.status, r.admin_remarks, r.created_at, r.resolved_at,
+           ql.id AS quick_link_id, ql.name AS link_name, ql.url AS link_url, ql.description AS link_description,
+           u.username AS requested_by
+    FROM quick_link_publish_requests r
+    JOIN quick_links ql ON ql.id = r.quick_link_id
+    JOIN users u ON u.id = r.requested_by_user_id
+    ${where}
+    ORDER BY r.created_at DESC
+  `).all(...(status === 'all' ? [] : [status]));
+  res.json({ requests: rows });
+});
+
+// POST /admin/quicklinks/publish-requests/:id/approve { category_id } -> creates a
+// real items row under that category (dashboard is derived from the category), marks
+// the QuickLink 'published', and closes the request.
+router.post('/quicklinks/publish-requests/:id/approve', (req, res) => {
+  const request = db.prepare('SELECT * FROM quick_link_publish_requests WHERE id = ?').get(req.params.id);
+  if (!request || request.status !== 'pending') return res.status(404).json({ error: 'not_found_or_resolved' });
+  const link = db.prepare('SELECT * FROM quick_links WHERE id = ?').get(request.quick_link_id);
+  if (!link) return res.status(404).json({ error: 'quicklink_not_found' });
+  const { category_id } = req.body || {};
+  const category = category_id ? db.prepare('SELECT * FROM categories WHERE id = ?').get(category_id) : null;
+  if (!category) return res.status(400).json({ error: 'invalid_category' });
+
+  const itemId = db.transaction(() => {
+    const info = db.prepare(`
+      INSERT INTO items (dashboard_id, category_id, name, url, description, visibility)
+      VALUES (?, ?, ?, ?, ?, 'authenticated')
+    `).run(category.dashboard_id, category.id, link.name, link.url, link.description || '');
+    db.prepare("UPDATE quick_links SET status = 'published' WHERE id = ?").run(link.id);
+    db.prepare(`
+      UPDATE quick_link_publish_requests
+      SET status = 'approved', resolved_by_user_id = ?, resolved_item_id = ?, resolved_at = datetime('now')
+      WHERE id = ?
+    `).run(req.user.id, info.lastInsertRowid, request.id);
+    return info.lastInsertRowid;
+  })();
+  res.json({ ok: true, item_id: itemId });
+});
+
+router.post('/quicklinks/publish-requests/:id/reject', (req, res) => {
+  const request = db.prepare('SELECT * FROM quick_link_publish_requests WHERE id = ?').get(req.params.id);
+  if (!request || request.status !== 'pending') return res.status(404).json({ error: 'not_found_or_resolved' });
+  const { admin_remarks = '' } = req.body || {};
+  db.transaction(() => {
+    db.prepare(`
+      UPDATE quick_link_publish_requests
+      SET status = 'rejected', admin_remarks = ?, resolved_by_user_id = ?, resolved_at = datetime('now')
+      WHERE id = ?
+    `).run(admin_remarks.trim(), req.user.id, request.id);
+    db.prepare("UPDATE quick_links SET status = 'private' WHERE id = ?").run(request.quick_link_id);
+  })();
+  res.json({ ok: true });
+});
+
 // ---------- branding ----------
 // Partial update — only touches fields present in the body, same style as PUT
 // /users/:id above. Any field may be explicitly null to clear it back to unset.

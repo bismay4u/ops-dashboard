@@ -65,6 +65,15 @@ function adminApp() {
     userActivity: [],
     userActivityFilter: 'all', // 'all' | 'active' | 'inactive'
 
+    // quick links (monitoring + publish requests)
+    quickLinksAdmin: [],
+    qlPublishRequests: [],
+    qlApproveModalOpen: false,
+    qlApproveRequestId: null,
+    qlApproveDashboardId: null,
+    qlApproveCategories: [],
+    qlApproveCategoryId: null,
+
     // branding — form state for the Branding tab, plus what's currently applied
     appTitle: 'Ops Dashboard',
     logoUrl: null,
@@ -613,6 +622,50 @@ function adminApp() {
     },
     eventLabel(e) {
       return `${e.category} / ${e.action}`;
+    },
+
+    // ---------- quick links ----------
+    async loadQuickLinksAdmin() {
+      const data = await this.api('/quicklinks');
+      this.quickLinksAdmin = data.quicklinks;
+    },
+    async loadQlPublishRequests() {
+      const data = await this.api('/quicklinks/publish-requests?status=pending');
+      this.qlPublishRequests = data.requests;
+    },
+    async deleteQuickLinkAdmin(link) {
+      if (!confirm(`Delete "${link.name}" (owned by ${link.owner_username})? This removes it for them too.`)) return;
+      await this.api(`/quicklinks/${link.id}`, { method: 'DELETE' });
+      this.pushToast('QuickLink deleted', 'success');
+      await this.loadQuickLinksAdmin();
+    },
+    async loadQlApproveCategories(dashboardId) {
+      if (!dashboardId) { this.qlApproveCategories = []; this.qlApproveCategoryId = null; return; }
+      const slug = this.dashboards.find(d => d.id === Number(dashboardId)).slug;
+      const dash = await fetch(`/api/dashboards/${slug}`, { credentials: 'include' }).then(r => r.json());
+      this.qlApproveCategories = dash.sections.flatMap(s => s.categories.map(({ items, ...c }) => c));
+      this.qlApproveCategoryId = this.qlApproveCategories[0] ? this.qlApproveCategories[0].id : null;
+    },
+    async openQlApproveModal(request) {
+      this.qlApproveRequestId = request.id;
+      this.qlApproveDashboardId = this.dashboards[0] ? this.dashboards[0].id : null;
+      await this.loadQlApproveCategories(this.qlApproveDashboardId);
+      this.qlApproveModalOpen = true;
+    },
+    async approveQlRequest() {
+      if (!this.qlApproveCategoryId) { this.pushToast('Pick a category first', 'error'); return; }
+      await this.api(`/quicklinks/publish-requests/${this.qlApproveRequestId}/approve`, { method: 'POST', body: JSON.stringify({ category_id: this.qlApproveCategoryId }) });
+      this.qlApproveModalOpen = false;
+      this.pushToast('Approved — now live as a dashboard item', 'success');
+      await this.loadQlPublishRequests();
+      await this.loadQuickLinksAdmin();
+    },
+    async rejectQlRequest(request) {
+      const admin_remarks = prompt('Reason for rejecting (optional):') || '';
+      await this.api(`/quicklinks/publish-requests/${request.id}/reject`, { method: 'POST', body: JSON.stringify({ admin_remarks }) });
+      this.pushToast('Request rejected', 'success');
+      await this.loadQlPublishRequests();
+      await this.loadQuickLinksAdmin();
     },
 
     // ---------- backup / json ----------

@@ -11,7 +11,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
-<link rel="stylesheet" href="/css/style.css?v=3">
+<link rel="stylesheet" href="/css/style.css?v=4">
 </head>
 <body x-data="dashboardApp()" x-init="init()" @keydown.window="onGlobalKeydown($event)">
 
@@ -84,7 +84,69 @@
         </div>
       </nav>
 
-      <div class="shell">
+      <div class="shell shell-with-sidebar">
+        <aside class="quicklinks-sidebar">
+          <h2>
+            <span><i class="bi bi-link-45deg"></i> QuickLinks</span>
+            <template x-if="user">
+              <button class="icon-btn" @click="openQlModal()" aria-label="Add QuickLink" title="Add QuickLink" style="width:24px;height:24px;"><i class="bi bi-plus-lg" style="font-size:0.7rem;"></i></button>
+            </template>
+          </h2>
+
+          <template x-if="!user">
+            <p style="font-size:0.78rem;color:var(--ink-soft);">Sign in to add your own private links here.</p>
+          </template>
+
+          <template x-if="user">
+            <div>
+              <template x-if="!activeOwnQuickLinks().length && !quickLinks.shared.length">
+                <p style="font-size:0.78rem;color:var(--ink-soft);">No QuickLinks yet — add your first private bookmark.</p>
+              </template>
+
+              <template x-if="activeOwnQuickLinks().length">
+                <div>
+                  <div class="quicklink-group-label">My QuickLinks</div>
+                  <template x-for="link in activeOwnQuickLinks()" :key="link.id">
+                    <div class="quicklink-row">
+                      <a :href="link.url" target="_blank" rel="noopener" @click="touchQuickLink(link)" :title="link.description || link.name">
+                        <i class="bi bi-link-45deg"></i>
+                        <span x-text="link.name"></span>
+                      </a>
+                      <template x-if="link.status === 'pending_publish'">
+                        <span class="pill" title="Publish request pending admin review" style="flex:none;">pending</span>
+                      </template>
+                      <div class="quicklink-actions">
+                        <button @click.stop.prevent="openShareModal(link)" title="Share"><i class="bi bi-share"></i></button>
+                        <button @click.stop.prevent="openQlModal(link)" title="Edit"><i class="bi bi-pencil"></i></button>
+                        <template x-if="link.status === 'private'">
+                          <button @click.stop.prevent="openPublishModal(link)" title="Request publish"><i class="bi bi-megaphone"></i></button>
+                        </template>
+                        <button @click.stop.prevent="deleteQuickLink(link)" title="Delete"><i class="bi bi-trash"></i></button>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </template>
+
+              <template x-if="quickLinks.shared.length">
+                <div>
+                  <div class="quicklink-group-label">Shared with me</div>
+                  <template x-for="link in quickLinks.shared" :key="'shared-' + link.id">
+                    <div class="quicklink-row">
+                      <a :href="link.url" target="_blank" rel="noopener" @click="touchQuickLink(link)" :title="(link.description || link.name) + ' — from ' + link.owner_username">
+                        <i class="bi bi-link-45deg"></i>
+                        <span x-text="link.name"></span>
+                      </a>
+                      <span style="font-size:0.65rem;color:var(--ink-soft);flex:none;" x-text="link.owner_username"></span>
+                    </div>
+                  </template>
+                </div>
+              </template>
+            </div>
+          </template>
+        </aside>
+
+        <div class="shell-main">
         <div class="page-header">
           <div class="page-header-title">
             <h1 class="hero-title" x-text="greeting"></h1>
@@ -237,6 +299,7 @@
             </template>
           </div>
         </template>
+        </div>
       </div>
     </div>
   </template>
@@ -343,6 +406,73 @@
             <button class="btn-sm primary" type="submit" :disabled="feedbackLoading">
               <span x-text="feedbackLoading ? 'Sending…' : 'Send feedback'"></span>
             </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </template>
+
+  <!-- ================= QUICKLINK CREATE/EDIT MODAL ================= -->
+  <template x-if="qlModalOpen">
+    <div class="modal-backdrop" @click.self="qlModalOpen = false">
+      <div class="modal" style="max-width:420px;" role="dialog" aria-modal="true" :aria-label="qlEditingId ? 'Edit QuickLink' : 'Add QuickLink'">
+        <h3 x-text="qlEditingId ? 'Edit QuickLink' : 'Add QuickLink'"></h3>
+        <template x-if="qlError">
+          <div style="color:var(--down);font-size:0.85rem;margin-bottom:0.75rem;" x-text="qlError"></div>
+        </template>
+        <form @submit.prevent="saveQuickLink()">
+          <div class="field"><label>Name</label><input type="text" x-model="qlForm.name" required></div>
+          <div class="field"><label>URL</label><input type="url" x-model="qlForm.url" placeholder="https://…" required></div>
+          <div class="field"><label>Description (optional)</label><textarea x-model="qlForm.description" rows="2"></textarea></div>
+          <div class="modal-actions">
+            <button type="button" class="btn-sm" @click="qlModalOpen = false">Cancel</button>
+            <button class="btn-sm primary" type="submit" :disabled="qlSaving">
+              <span x-text="qlSaving ? 'Saving…' : 'Save'"></span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </template>
+
+  <!-- ================= QUICKLINK SHARE MODAL ================= -->
+  <template x-if="qlShareModalOpen">
+    <div class="modal-backdrop" @click.self="qlShareModalOpen = false">
+      <div class="modal" style="max-width:380px;" role="dialog" aria-modal="true" aria-label="Share QuickLink">
+        <h3>Share QuickLink</h3>
+        <p class="help-text" style="margin-bottom:0.75rem;">Pick who else can see and open this link.</p>
+        <div style="max-height:280px;overflow-y:auto;display:flex;flex-direction:column;gap:0.3rem;">
+          <template x-if="!qlAllUsers.length">
+            <p style="font-size:0.82rem;color:var(--ink-soft);">No other users exist yet.</p>
+          </template>
+          <template x-for="u in qlAllUsers" :key="u.id">
+            <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;cursor:pointer;">
+              <input type="checkbox" :checked="qlShareUserIds.includes(u.id)" @change="toggleQlShareUser(u.id)">
+              <span x-text="u.username"></span>
+            </label>
+          </template>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn-sm" @click="qlShareModalOpen = false">Cancel</button>
+          <button class="btn-sm primary" @click="saveShares()">Save sharing</button>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- ================= QUICKLINK PUBLISH REQUEST MODAL ================= -->
+  <template x-if="qlPublishModalOpen">
+    <div class="modal-backdrop" @click.self="qlPublishModalOpen = false">
+      <div class="modal" style="max-width:420px;" role="dialog" aria-modal="true" aria-label="Request publish">
+        <h3>Request to make this generally available</h3>
+        <p class="help-text" style="margin-bottom:0.75rem;">
+          An admin will review this and, if approved, add it as a normal item under a dashboard section for everyone.
+        </p>
+        <form @submit.prevent="submitPublishRequest()">
+          <div class="field"><label>Remarks for the admin (optional)</label><textarea x-model="qlPublishRemarks" rows="3" placeholder="Why should this be available to everyone?"></textarea></div>
+          <div class="modal-actions">
+            <button type="button" class="btn-sm" @click="qlPublishModalOpen = false">Cancel</button>
+            <button class="btn-sm primary" type="submit">Send request</button>
           </div>
         </form>
       </div>

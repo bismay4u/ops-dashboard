@@ -171,11 +171,54 @@ CREATE TABLE IF NOT EXISTS events (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+-- QuickLinks: a user's own private bookmarks (distinct from admin-managed items).
+-- status moves private -> pending_publish (a publish request is open) -> published
+-- (an admin approved it and it now also exists as a normal items row) or back to
+-- private (rejected). Published links are kept, not deleted, as the audit trail for
+-- "this quicklink became that dashboard item".
+CREATE TABLE IF NOT EXISTS quick_links (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  description TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'private', -- 'private' | 'pending_publish' | 'published'
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Who a QuickLink's owner has personally shared it with (distinct from the roles
+-- system — this is direct user-to-user sharing of a private link, not a visibility rule).
+CREATE TABLE IF NOT EXISTS quick_link_shares (
+  quick_link_id INTEGER NOT NULL REFERENCES quick_links(id) ON DELETE CASCADE,
+  shared_with_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY (quick_link_id, shared_with_user_id)
+);
+
+-- A user's ask to make their private QuickLink a normal, generally-available item.
+-- On approval the admin picks a dashboard/category and a real items row is created
+-- (resolved_item_id); on rejection the QuickLink just reverts to 'private'.
+CREATE TABLE IF NOT EXISTS quick_link_publish_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  quick_link_id INTEGER NOT NULL REFERENCES quick_links(id) ON DELETE CASCADE,
+  requested_by_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  remarks TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending', -- 'pending' | 'approved' | 'rejected'
+  admin_remarks TEXT,
+  resolved_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  resolved_item_id INTEGER REFERENCES items(id) ON DELETE SET NULL,
+  created_at TEXT DEFAULT (datetime('now')),
+  resolved_at TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_items_dashboard ON items(dashboard_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_item ON feedback(item_id);
 CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
 CREATE INDEX IF NOT EXISTS idx_events_category_action ON events(category, action);
 CREATE INDEX IF NOT EXISTS idx_events_item ON events(item_id);
+CREATE INDEX IF NOT EXISTS idx_quicklinks_owner ON quick_links(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_quicklink_shares_user ON quick_link_shares(shared_with_user_id);
+CREATE INDEX IF NOT EXISTS idx_quicklink_requests_status ON quick_link_publish_requests(status);
 CREATE INDEX IF NOT EXISTS idx_categories_dashboard ON categories(dashboard_id);
 CREATE INDEX IF NOT EXISTS idx_sections_dashboard ON sections(dashboard_id);
 CREATE INDEX IF NOT EXISTS idx_status_log_item ON status_log(item_id, checked_at);
@@ -206,6 +249,7 @@ ensureColumn('items', 'notes_visibility', `notes_visibility TEXT NOT NULL DEFAUL
 // either by an admin or by the 45-day auto-closer — see services/feedbackAutoCloser.js).
 ensureColumn('feedback', 'status', `status TEXT NOT NULL DEFAULT 'open'`);
 ensureColumn('feedback', 'closed_at', 'closed_at TEXT');
+ensureColumn('events', 'quicklink_id', 'quicklink_id INTEGER REFERENCES quick_links(id) ON DELETE SET NULL');
 const hadOldTeamColumn = hasColumn('users', 'team');
 const hadOldRoleColumn = hasColumn('users', 'role');
 const hadOldSectionColumn = hasColumn('categories', 'section');
@@ -372,10 +416,10 @@ function noteUserIdMap(itemIds) {
 
 // Fire-and-forget analytics write — callers never await this or let it block/fail
 // the request it's attached to; a missed event is not worth a 500.
-function logEvent({ userId = null, category, action, itemId = null, label = null, ip = null }) {
+function logEvent({ userId = null, category, action, itemId = null, quicklinkId = null, label = null, ip = null }) {
   try {
-    db.prepare('INSERT INTO events (user_id, category, action, item_id, label, ip) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(userId, category, action, itemId, label, ip);
+    db.prepare('INSERT INTO events (user_id, category, action, item_id, quicklink_id, label, ip) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(userId, category, action, itemId, quicklinkId, label, ip);
   } catch (e) {
     console.warn('[events] log failed:', e.message);
   }
