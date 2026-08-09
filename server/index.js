@@ -34,7 +34,19 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/status', statusRoutes);
 app.use('/api/settings', settingsRoutes);
 
-app.use(express.static(path.join(__dirname, '..', 'public')));
+// Off by default (normal browser caching applies). Set DISABLE_STATIC_CACHE=true
+// in .env to force no-cache on .css/.js while iterating on the frontend, so
+// browsers always revalidate instead of serving a stale asset after deploy.
+const disableStaticCache = process.env.DISABLE_STATIC_CACHE === 'true';
+app.use(express.static(path.join(__dirname, '..', 'public'), {
+  setHeaders: disableStaticCache
+    ? (res, filePath) => {
+        if (filePath.endsWith('.css') || filePath.endsWith('.js')) {
+          res.setHeader('Cache-Control', 'no-cache');
+        }
+      }
+    : undefined,
+}));
 
 app.get('/healthz', (req, res) => res.json({ ok: true }));
 
