@@ -184,4 +184,25 @@ router.post('/items/:id/favorite', requireAuth, (req, res) => {
   res.json({ favorited: true });
 });
 
+// POST /api/dashboards/items/:id/feedback -> leave feedback on this item, for admin
+// review. Requires login (same tier as favorites) so reviewers know who wrote it.
+router.post('/items/:id/feedback', requireAuth, (req, res) => {
+  const item = db.prepare('SELECT items.*, dashboards.visibility AS dashboard_visibility, dashboards.id AS dashboard_id FROM items JOIN dashboards ON dashboards.id = items.dashboard_id WHERE items.id = ?').get(req.params.id);
+  if (!item) return res.status(404).json({ error: 'not_found' });
+  const dashboardRoleNames = roleNameMap('dashboard_roles', 'dashboard_id', [item.dashboard_id])[item.dashboard_id];
+  const itemRoleNames = roleNameMap('item_roles', 'item_id', [item.id])[item.id];
+  if (!canSee(item.dashboard_visibility, req.user, dashboardRoleNames) || !canSee(item.visibility, req.user, itemRoleNames)) {
+    return res.status(404).json({ error: 'not_found' });
+  }
+  const { message, rating } = req.body || {};
+  if (!message || !message.trim()) return res.status(400).json({ error: 'message_required' });
+  const normalizedRating = rating === undefined || rating === null || rating === '' ? null : Number(rating);
+  if (normalizedRating !== null && (!Number.isInteger(normalizedRating) || normalizedRating < 1 || normalizedRating > 5)) {
+    return res.status(400).json({ error: 'invalid_rating' });
+  }
+  db.prepare('INSERT INTO feedback (item_id, user_id, rating, message) VALUES (?, ?, ?, ?)')
+    .run(item.id, req.user.id, normalizedRating, message.trim());
+  res.json({ ok: true });
+});
+
 module.exports = router;

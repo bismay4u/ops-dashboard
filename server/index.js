@@ -7,6 +7,7 @@ const cors = require('cors');
 require('./db'); // ensures schema + bootstrap admin/dashboard run before anything else
 const { resolveUser } = require('./middleware/auth');
 const { startStatusChecker } = require('./services/statusChecker');
+const { startFeedbackAutoCloser } = require('./services/feedbackAutoCloser');
 
 const authRoutes = require('./routes/auth');
 const dashboardRoutes = require('./routes/dashboards');
@@ -54,4 +55,5 @@ const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`[ops-dashboard] listening on :${PORT}`);
   startStatusChecker();
+  startFeedbackAutoCloser();
 });

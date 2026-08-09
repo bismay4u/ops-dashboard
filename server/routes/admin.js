@@ -394,6 +394,40 @@ router.post('/dashboards/:id/import', (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- Feedback ----------
+router.get('/feedback', (req, res) => {
+  const rows = db.prepare(`
+    SELECT f.id, f.rating, f.message, f.status, f.created_at, f.closed_at,
+           i.id AS item_id, i.name AS item_name,
+           d.id AS dashboard_id, d.name AS dashboard_name,
+           u.id AS user_id, u.username
+    FROM feedback f
+    JOIN items i ON i.id = f.item_id
+    JOIN dashboards d ON d.id = i.dashboard_id
+    JOIN users u ON u.id = f.user_id
+    ORDER BY f.created_at DESC
+  `).all();
+  res.json({ feedback: rows });
+});
+
+// 'open' (just submitted) -> 'pending' (admin looking into it) -> 'closed' (resolved).
+// Also auto-closed after FEEDBACK_AUTO_CLOSE_DAYS by services/feedbackAutoCloser.js.
+router.put('/feedback/:id/status', (req, res) => {
+  const { status } = req.body || {};
+  if (!['open', 'pending', 'closed'].includes(status)) return res.status(400).json({ error: 'invalid_status' });
+  if (status === 'closed') {
+    db.prepare("UPDATE feedback SET status = ?, closed_at = datetime('now') WHERE id = ?").run(status, req.params.id);
+  } else {
+    db.prepare('UPDATE feedback SET status = ?, closed_at = NULL WHERE id = ?').run(status, req.params.id);
+  }
+  res.json({ ok: true });
+});
+
+router.delete('/feedback/:id', (req, res) => {
+  db.prepare('DELETE FROM feedback WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
 // ---------- branding ----------
 // Partial update — only touches fields present in the body, same style as PUT
 // /users/:id above. Any field may be explicitly null to clear it back to unset.

@@ -87,6 +87,42 @@ function dashboardApp() {
       }
     },
 
+    // feedback on an item
+    feedbackModalOpen: false,
+    feedbackModalItem: null,
+    feedbackForm: { rating: 0, message: '' },
+    feedbackError: null,
+    feedbackLoading: false,
+    openFeedback(item) {
+      this.feedbackModalItem = item;
+      this.feedbackForm = { rating: 0, message: '' };
+      this.feedbackError = null;
+      this.feedbackModalOpen = true;
+    },
+    async submitFeedback() {
+      if (!this.feedbackForm.message.trim()) {
+        this.feedbackError = 'Please enter a message.';
+        return;
+      }
+      this.feedbackLoading = true;
+      this.feedbackError = null;
+      try {
+        const res = await fetch(`/api/dashboards/items/${this.feedbackModalItem.id}/feedback`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ message: this.feedbackForm.message.trim(), rating: this.feedbackForm.rating || null }),
+        });
+        if (!res.ok) throw new Error();
+        this.feedbackModalOpen = false;
+        this.pushToast('Thanks for the feedback!', 'success');
+      } catch (e) {
+        this.feedbackError = 'Could not submit feedback.';
+      } finally {
+        this.feedbackLoading = false;
+      }
+    },
+
     // dashboards
     dashboards: [],
     activeSlug: null,

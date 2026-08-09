@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
-<link rel="stylesheet" href="/css/style.css?v=1">
+<link rel="stylesheet" href="/css/style.css?v=2">
 </head>
 <body x-data="adminApp()" x-init="init()">
 
@@ -38,6 +38,7 @@
       <button :class="{active: tab==='users'}" @click="tab='users'"><i class="bi bi-people"></i> Users</button>
       <button :class="{active: tab==='ip'}" @click="tab='ip'"><i class="bi bi-router"></i> IP Mappings</button>
       <button :class="{active: tab==='status'}" @click="tab='status'"><i class="bi bi-activity"></i> Live Status</button>
+      <button :class="{active: tab==='feedback'}" @click="tab='feedback'; loadFeedback()"><i class="bi bi-chat-square-text"></i> Feedback</button>
       <button :class="{active: tab==='backup'}" @click="tab='backup'"><i class="bi bi-cloud-arrow-down"></i> Backup / JSON</button>
       <button :class="{active: tab==='branding'}" @click="tab='branding'"><i class="bi bi-palette"></i> Branding</button>
       <button :class="{active: tab==='update'}" @click="tab='update'"><i class="bi bi-arrow-repeat"></i> Update</button>
@@ -338,6 +339,63 @@
               </template>
               <template x-if="!monitoredItems.length">
                 <tr><td colspan="5" style="color:var(--ink-soft);">No items have live status enabled yet. Turn it on from the Items tab.</td></tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </template>
+
+    <!-- ===================== FEEDBACK ===================== -->
+    <template x-if="tab==='feedback'">
+      <div>
+        <div class="panel-header">
+          <h2>Feedback</h2>
+          <select x-model="feedbackStatusFilter" style="width:auto;">
+            <option value="open_pending">Open + Pending</option>
+            <option value="all">All</option>
+            <option value="open">Open</option>
+            <option value="pending">Pending action</option>
+            <option value="closed">Closed</option>
+          </select>
+        </div>
+        <div class="status-note">
+          <i class="bi bi-info-circle"></i>
+          <div>
+            Feedback users have left on individual apps/bookmarks, newest first. New feedback starts
+            <span class="pill down">open</span>; mark it <span class="pill">pending</span> while you're looking
+            into it, then <span class="pill up">closed</span> once resolved. Anything left open or pending for
+            45 days closes on its own. Delete removes it entirely — there's no reply thread, this is just a log.
+          </div>
+        </div>
+        <div class="admin-panel">
+          <table class="admin-table">
+            <thead><tr><th>Item</th><th>Dashboard</th><th>User</th><th>Rating</th><th>Message</th><th>Submitted</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+              <template x-for="f in visibleFeedback()" :key="f.id">
+                <tr>
+                  <td x-text="f.item_name"></td>
+                  <td x-text="f.dashboard_name"></td>
+                  <td x-text="f.username"></td>
+                  <td>
+                    <span x-show="f.rating" x-text="f.rating + ' / 5'"></span>
+                    <span x-show="!f.rating" style="color:var(--ink-soft);">—</span>
+                  </td>
+                  <td style="white-space:pre-wrap;max-width:360px;" x-text="f.message"></td>
+                  <td style="font-family:var(--font-mono);font-size:0.75rem;" x-text="f.created_at"></td>
+                  <td>
+                    <span class="pill" :class="{down: f.status==='open', up: f.status==='closed'}" x-text="f.status"></span>
+                  </td>
+                  <td style="display:flex;gap:0.3rem;">
+                    <button class="btn-sm" x-show="f.status==='open'" @click="setFeedbackStatus(f, 'pending')" title="Mark pending"><i class="bi bi-hourglass-split"></i></button>
+                    <button class="btn-sm" x-show="f.status!=='closed'" @click="setFeedbackStatus(f, 'closed')" title="Close"><i class="bi bi-check-lg"></i></button>
+                    <button class="btn-sm" x-show="f.status==='closed'" @click="setFeedbackStatus(f, 'open')" title="Reopen"><i class="bi bi-arrow-counterclockwise"></i></button>
+                    <button class="btn-sm danger" @click="deleteFeedback(f)" title="Delete"><i class="bi bi-trash"></i></button>
+                  </td>
+                </tr>
+              </template>
+              <template x-if="!visibleFeedback().length">
+                <tr><td colspan="8" style="color:var(--ink-soft);">No feedback in this view.</td></tr>
               </template>
             </tbody>
           </table>

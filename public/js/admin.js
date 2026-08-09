@@ -51,6 +51,9 @@ function adminApp() {
     backupDashboardId: null,
     importText: '',
 
+    feedback: [],
+    feedbackStatusFilter: 'open_pending', // 'open_pending' | 'all' | 'open' | 'pending' | 'closed'
+
     // branding — form state for the Branding tab, plus what's currently applied
     appTitle: 'Ops Dashboard',
     logoUrl: null,
@@ -521,6 +524,27 @@ function adminApp() {
       await this.api(`/ip-mappings/${m.id}`, { method: 'DELETE' });
       this.pushToast('Mapping removed', 'success');
       await this.loadMappings();
+    },
+
+    // ---------- feedback ----------
+    async loadFeedback() {
+      const data = await this.api('/feedback');
+      this.feedback = data.feedback;
+    },
+    visibleFeedback() {
+      if (this.feedbackStatusFilter === 'all') return this.feedback;
+      if (this.feedbackStatusFilter === 'open_pending') return this.feedback.filter(f => f.status !== 'closed');
+      return this.feedback.filter(f => f.status === this.feedbackStatusFilter);
+    },
+    async setFeedbackStatus(f, status) {
+      await this.api(`/feedback/${f.id}/status`, { method: 'PUT', body: JSON.stringify({ status }) });
+      await this.loadFeedback();
+    },
+    async deleteFeedback(f) {
+      if (!confirm(`Delete this feedback from "${f.username}" on "${f.item_name}"?`)) return;
+      await this.api(`/feedback/${f.id}`, { method: 'DELETE' });
+      this.pushToast('Feedback deleted', 'success');
+      await this.loadFeedback();
     },
 
     // ---------- backup / json ----------

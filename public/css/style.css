@@ -617,6 +617,8 @@ body {
    when an item has both notes and a favorite toggle available. */
 .app-card .notes-btn { right: 2.2rem; }
 .app-card .notes-btn:hover { color: var(--accent); }
+.app-card .feedback-btn { right: 3.9rem; }
+.app-card .feedback-btn:hover { color: var(--accent); }
 .bookmark-row { position: relative; display: flex; align-items: center; gap: 0.4rem; }
 .bookmark-row .favorite-star { position: static; opacity: 0.35; width: 20px; height: 20px; font-size: 0.72rem; }
 .bookmark-row:hover .favorite-star, .bookmark-row .favorite-star.active { opacity: 1; }

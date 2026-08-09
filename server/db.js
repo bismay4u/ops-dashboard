@@ -143,7 +143,20 @@ CREATE TABLE IF NOT EXISTS branding (
   accent_color TEXT
 );
 
+-- Free-text feedback a signed-in user leaves on a specific item, for admin review.
+-- Not a support ticket system — no status/reply thread, just a log kept for as long
+-- as an admin wants it (delete from the admin console when reviewed/stale).
+CREATE TABLE IF NOT EXISTS feedback (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  rating INTEGER CHECK (rating IS NULL OR (rating BETWEEN 1 AND 5)),
+  message TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_items_dashboard ON items(dashboard_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_item ON feedback(item_id);
 CREATE INDEX IF NOT EXISTS idx_categories_dashboard ON categories(dashboard_id);
 CREATE INDEX IF NOT EXISTS idx_sections_dashboard ON sections(dashboard_id);
 CREATE INDEX IF NOT EXISTS idx_status_log_item ON status_log(item_id, checked_at);
@@ -170,6 +183,10 @@ ensureColumn('dashboards', 'visibility', `visibility TEXT NOT NULL DEFAULT 'auth
 ensureColumn('users', 'deleted_at', 'deleted_at TEXT DEFAULT NULL');
 ensureColumn('items', 'notes', 'notes TEXT');
 ensureColumn('items', 'notes_visibility', `notes_visibility TEXT NOT NULL DEFAULT 'all'`);
+// 'open' (just submitted) -> 'pending' (admin is looking into it) -> 'closed' (resolved,
+// either by an admin or by the 45-day auto-closer — see services/feedbackAutoCloser.js).
+ensureColumn('feedback', 'status', `status TEXT NOT NULL DEFAULT 'open'`);
+ensureColumn('feedback', 'closed_at', 'closed_at TEXT');
 const hadOldTeamColumn = hasColumn('users', 'team');
 const hadOldRoleColumn = hasColumn('users', 'role');
 const hadOldSectionColumn = hasColumn('categories', 'section');

@@ -11,7 +11,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
-<link rel="stylesheet" href="/css/style.css?v=1">
+<link rel="stylesheet" href="/css/style.css?v=2">
 </head>
 <body x-data="dashboardApp()" x-init="init()" @keydown.window="onGlobalKeydown($event)">
 
@@ -132,6 +132,7 @@
                       <template x-if="item.has_notes && item.can_view_notes">
                         <button class="favorite-star notes-btn" @click.stop.prevent="openNotes(item)" aria-label="View notes"><i class="bi bi-sticky"></i></button>
                       </template>
+                      <button class="favorite-star feedback-btn" @click.stop.prevent="openFeedback(item)" aria-label="Leave feedback"><i class="bi bi-chat-square-text"></i></button>
                       <button class="favorite-star active" @click.stop.prevent="toggleFavorite(item)" aria-label="Remove from favorites"><i class="bi bi-star-fill"></i></button>
                     </div>
                   </template>
@@ -173,6 +174,9 @@
                                 <button class="favorite-star notes-btn" @click.stop.prevent="openNotes(item)" aria-label="View notes"><i class="bi bi-sticky"></i></button>
                               </template>
                               <template x-if="user">
+                                <button class="favorite-star feedback-btn" @click.stop.prevent="openFeedback(item)" aria-label="Leave feedback"><i class="bi bi-chat-square-text"></i></button>
+                              </template>
+                              <template x-if="user">
                                 <button class="favorite-star" :class="{active: item.is_favorite}" @click.stop.prevent="toggleFavorite(item)" :aria-label="item.is_favorite ? 'Remove from favorites' : 'Add to favorites'">
                                   <i class="bi" :class="item.is_favorite ? 'bi-star-fill' : 'bi-star'"></i>
                                 </button>
@@ -205,6 +209,9 @@
                                 </a>
                                 <template x-if="item.has_notes && item.can_view_notes">
                                   <button class="favorite-star notes-btn" @click.stop.prevent="openNotes(item)" aria-label="View notes"><i class="bi bi-sticky"></i></button>
+                                </template>
+                                <template x-if="user">
+                                  <button class="favorite-star" @click.stop.prevent="openFeedback(item)" aria-label="Leave feedback"><i class="bi bi-chat-square-text"></i></button>
                                 </template>
                                 <template x-if="user">
                                   <button class="favorite-star" :class="{active: item.is_favorite}" @click.stop.prevent="toggleFavorite(item)" :aria-label="item.is_favorite ? 'Remove from favorites' : 'Add to favorites'">
@@ -302,6 +309,42 @@
           <button class="btn-sm" @click="notesModalOpen = false">Close</button>
           <button class="btn-sm primary" :disabled="notesLoading" @click="copyNotes()"><i class="bi bi-clipboard"></i> Copy</button>
         </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- ================= FEEDBACK MODAL ================= -->
+  <template x-if="feedbackModalOpen">
+    <div class="modal-backdrop" @click.self="feedbackModalOpen = false">
+      <div class="modal" style="max-width:420px;" role="dialog" aria-modal="true" aria-label="Leave feedback">
+        <h3 x-text="'Feedback: ' + (feedbackModalItem ? feedbackModalItem.name : '')"></h3>
+        <template x-if="feedbackError">
+          <div style="color:var(--down);font-size:0.85rem;margin-bottom:0.75rem;" x-text="feedbackError"></div>
+        </template>
+        <form @submit.prevent="submitFeedback()">
+          <div class="field">
+            <label>Rating (optional)</label>
+            <div style="display:flex;gap:0.25rem;">
+              <template x-for="n in [1,2,3,4,5]" :key="n">
+                <button type="button" class="favorite-star" style="position:static;opacity:1;font-size:1.1rem;"
+                        @click="feedbackForm.rating = (feedbackForm.rating === n ? 0 : n)"
+                        :aria-label="'Rate ' + n + ' out of 5'">
+                  <i class="bi" :class="feedbackForm.rating >= n ? 'bi-star-fill' : 'bi-star'" :style="feedbackForm.rating >= n ? 'color:#f5b400;' : ''"></i>
+                </button>
+              </template>
+            </div>
+          </div>
+          <div class="field">
+            <label>Your feedback</label>
+            <textarea x-model="feedbackForm.message" rows="4" required placeholder="What's working, what's not..."></textarea>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn-sm" @click="feedbackModalOpen = false">Cancel</button>
+            <button class="btn-sm primary" type="submit" :disabled="feedbackLoading">
+              <span x-text="feedbackLoading ? 'Sending…' : 'Send feedback'"></span>
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   </template>
